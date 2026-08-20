@@ -66,7 +66,7 @@ export async function POST(request: Request) {
       include: { services: true },
     });
 
-    return NextResponse.json({ id: endpoint.id, ...endpoint }, { status: 201 });
+    return NextResponse.json({ ...endpoint }, { status: 201 });
   } catch (error: any) {
     console.error('[POST /api/endpoints] Error:', error);
     return NextResponse.json(
