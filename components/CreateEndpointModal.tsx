@@ -41,66 +41,66 @@ export function CreateEndpointModal({ open, onOpenChange, onSuccess }: CreateEnd
     setCopied(false);
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError(null);
-    setIsSubmitting(true);
+const handleSubmit = async (e: React.FormEvent) => {
+  e.preventDefault();
+  setError(null);
+  setIsSubmitting(true);
 
-    if (selectedServices.size === 0) {
-      setError('Select at least one service.');
+  if (selectedServices.size === 0) {
+    setError('Select at least one service.');
+    setIsSubmitting(false);
+    return;
+  }
+
+  const services: any[] = [];
+
+  if (selectedServices.has('github')) {
+    if (!githubToken) {
+      setError('GitHub token is required.');
       setIsSubmitting(false);
       return;
     }
-
-    const services = [];
-    if (selectedServices.has('github')) {
-      if (!githubToken) {
-        setError('GitHub token is required.');
-        setIsSubmitting(false);
-        return;
-      }
-      services.push({ type: 'github', config: { token: githubToken } });
-    }
-    if (selectedServices.has('supabase')) {
-      if (!supabaseConnectionString) {
-        setError('Supabase connection string is required.');
-        setIsSubmitting(false);
-        return;
-      }
-      services.push({ type: 'supabase', config: { connectionString: supabaseConnectionString } });
-    }
-    if (selectedServices.has('vercel')) {
-      if (!vercelToken) {
-        setError('Vercel token is required.');
-        setIsSubmitting(false);
-        return;
-      }
-      services.push({ type: 'vercel', config: { token: vercelToken, teamId: vercelTeamId || undefined } });
-    }
-
-    try {
-      const response = await fetch('/api/endpoints', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: endpointName || 'My Endpoint', services }),
-      });
-
-      const data = await response.json();
-      
-      if (!response.ok) {
-        throw new Error(data.error || data.message || `HTTP ${response.status}: ${response.statusText}`);
-      }
-
-      const url = `${window.location.origin}/api/mcp/${data.id}/sse`;
-      setCreatedUrl(url);
-      onSuccess();
-    } catch (err: any) {
-      console.error('Create endpoint error:', err);
-      setError(err.message || 'Failed to create endpoint');
-    } finally {
+    services.push({ type: 'github', config: { token: githubToken } });
+  }
+  if (selectedServices.has('supabase')) {
+    if (!supabaseConnectionString) {
+      setError('Supabase connection string is required.');
       setIsSubmitting(false);
+      return;
     }
-  };
+    services.push({ type: 'supabase', config: { connectionString: supabaseConnectionString } });
+  }
+  if (selectedServices.has('vercel')) {
+    if (!vercelToken) {
+      setError('Vercel token is required.');
+      setIsSubmitting(false);
+      return;
+    }
+    services.push({ type: 'vercel', config: { token: vercelToken, teamId: vercelTeamId || undefined } });
+  }
+
+  try {
+    const response = await fetch('/api/endpoints', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: endpointName || 'My Endpoint', services }),
+    });
+
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || data.message || `HTTP ${response.status}: ${response.statusText}`);
+    }
+
+    const url = `${window.location.origin}/api/mcp/${data.id}/sse`;
+    setCreatedUrl(url);
+    onSuccess();
+  } catch (err: any) {
+    console.error('Create endpoint error:', err);
+    setError(err.message || 'Failed to create endpoint');
+  } finally {
+    setIsSubmitting(false);
+  }
+};
 
   const handleCopy = async () => {
     if (createdUrl) {
