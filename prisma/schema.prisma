@@ -1,0 +1,58 @@
+// prisma/schema.prisma
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Tabel Akun Pengguna
+model User {
+  id              String         @id @default(uuid())
+  email           String         @unique
+  password_hash   String
+  created_at      DateTime       @default(now())
+
+  endpoints       McpEndpoint[]
+}
+
+// Tabel Konfigurasi Endpoint MCP
+model McpEndpoint {
+  id              String              @id @default(uuid())
+  user_id         String
+  name            String
+  is_active       Boolean             @default(true)
+  created_at      DateTime            @default(now())
+
+  user            User                @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  services        EndpointService[]
+  logs            ExecutionLog[]
+}
+
+// Tabel Kredensial Layanan Terenkripsi
+model EndpointService {
+  id                String    @id @default(uuid())
+  endpoint_id       String
+  service_type      String    // 'github', 'supabase', 'vercel', 'custom'
+  encrypted_config  String    // JSON string terenkripsi (AES-256-GCM) → base64
+  iv                String    // Initialization Vector (base64)
+  tag               String    // Authentication Tag (base64)
+  created_at        DateTime  @default(now())
+
+  endpoint          McpEndpoint @relation(fields: [endpoint_id], references: [id], onDelete: Cascade)
+}
+
+// Tabel Audit & Log Eksekusi
+model ExecutionLog {
+  id                  String    @id @default(uuid())
+  endpoint_id         String
+  tool_name           String
+  status              String    // 'success', 'error'
+  execution_time_ms   Int
+  created_at          DateTime  @default(now())
+
+  endpoint            McpEndpoint @relation(fields: [endpoint_id], references: [id], onDelete: Cascade)
+}

@@ -1,0 +1,22 @@
+# Dependensi
+node_modules/
+.next/
+out/
+
+# Environment variables (JANGAN PERNAH COMMIT!)
+.env
+.env.local
+.env.production
+.env.development
+
+# Prisma
+prisma/*.db
+prisma/*.db-journal
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS files
+.DS_Store
+Thumbs.db
