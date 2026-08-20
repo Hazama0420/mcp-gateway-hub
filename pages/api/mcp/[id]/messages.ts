@@ -1,60 +1,72 @@
-// pages/api/mcp/[id]/messages.ts
 import { NextApiRequest, NextApiResponse } from 'next';
 import { transports } from '@/lib/transportStore';
-import prisma from '@/lib/prisma';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse
+) {
   if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed' });
+    res.status(405).json({ error: 'Method not allowed' });
+    return;
   }
 
-  const { id } = req.query;
-  const sessionId = req.query.sessionId as string;
+  const { id, sessionId } = req.query;
 
-  console.log('[Messages] Received request for endpoint:', id, 'sessionId:', sessionId);
-
-  if (!sessionId) {
-    return res.status(400).json({ error: 'Missing sessionId' });
+  if (Array.isArray(sessionId) || !sessionId) {
+    res.status(400).json({ error: 'Missing sessionId' });
+    return;
   }
+
+  console.log('[Messages] endpoint:', id);
+  console.log('[Messages] sessionId:', sessionId);
 
   const transport = transports.get(sessionId);
+
   if (!transport) {
-    console.error('[Messages] Session not found in Map. Available sessions:', Array.from(transports.keys()));
-    return res.status(404).json({ error: 'Session not found' });
+    console.error(
+      '[Messages] Session not found:',
+      sessionId
+    );
+
+    console.error(
+      '[Messages] Available sessions:',
+      Array.from(transports.keys())
+    );
+
+    res.status(404).json({
+      error: 'Session not found',
+    });
+
+    return;
   }
 
   try {
     const body = req.body;
-    const message = typeof body === 'string' ? JSON.parse(body) : body;
-    console.log('[Messages] Received message:', message.method);
 
-    const startTime = performance.now();
-    let toolName = 'unknown';
-    let status = 'success';
+    console.log(
+      '[Messages] body:',
+      typeof body === 'string'
+        ? body
+        : JSON.stringify(body)
+    );
 
-    if (message.method === 'tools/call' && message.params?.name) {
-      toolName = message.params.name;
-    }
+    await transport.handlePostMessage(
+      req,
+      res,
+      body
+    );
 
-    // 🔥 Gunakan transport.handleMessage
-    await transport.handleMessage(message);
+    console.log('[Messages] transport handled successfully');
+  } catch (error) {
+    console.error('[Messages] Transport error:', error);
 
-    const duration = Math.round(performance.now() - startTime);
-
-    if (message.method === 'tools/call') {
-      await prisma.executionLog.create({
-        data: {
-          endpoint_id: id as string,
-          tool_name: toolName,
-          status,
-          execution_time_ms: duration,
-        },
+    if (!res.headersSent) {
+      res.status(500).json({
+        error:
+          error instanceof Error
+            ? error.message
+            : String(error),
       });
     }
-
-    res.status(204).end();
-  } catch (error: any) {
-    console.error('[Messages] Error:', error);
-    res.status(500).json({ error: error.message });
   }
 }

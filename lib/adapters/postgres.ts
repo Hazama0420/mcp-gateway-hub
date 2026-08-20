@@ -1,5 +1,4 @@
 // lib/adapters/postgres.ts
-
 import { McpServer } from '@modelcontextprotocol/sdk';
 import { z } from 'zod';
 import { Pool } from 'pg';
@@ -8,11 +7,32 @@ interface PostgresCredentials {
   connectionString: string;
 }
 
+// Cache pool per connection string. Tanpa ini, setiap kali registerTools()
+// dipanggil (misal: tiap ada SSE session baru dari user/Inspector/Gemini),
+// akan membuka pool koneksi Postgres baru yang tidak pernah ditutup —
+// connection limit Neon/Supabase bisa cepat habis.
+const poolCache = new Map<string, Pool>();
+
+function getPool(connectionString: string): Pool {
+  let pool = poolCache.get(connectionString);
+  if (!pool) {
+    pool = new Pool({
+      connectionString,
+      max: 3, // kecil karena tiap adapter instance bisa hidup berbarengan di serverless
+      idleTimeoutMillis: 30_000,
+      connectionTimeoutMillis: 10_000,
+    });
+    pool.on('error', (err) => {
+      console.error('[postgres adapter] pool error, membuang dari cache:', err.message);
+      poolCache.delete(connectionString);
+    });
+    poolCache.set(connectionString, pool);
+  }
+  return pool;
+}
+
 export function registerTools(server: McpServer, credentials: PostgresCredentials) {
-  const pool = new Pool({
-    connectionString: credentials.connectionString,
-    // Sesuaikan ssl jika diperlukan, misal: ssl: { rejectUnauthorized: false }
-  });
+  const pool = getPool(credentials.connectionString);
 
   // Tool: run_sql_query
   server.tool(
@@ -26,26 +46,25 @@ export function registerTools(server: McpServer, credentials: PostgresCredential
       const client = await pool.connect();
       try {
         const result = await client.query(sql, params || []);
-        // Untuk SELECT, kembalikan rows; untuk lainnya, kembalikan rowCount dan command
         if (result.rows) {
           return {
             content: [
               {
                 type: 'text',
-                text: JSON.stringify({ rows: result.rows, rowCount: result.rowCount, command: result.command }, null, 2),
-              },
-            ],
-          };
-        } else {
-          return {
-            content: [
-              {
-                type: 'text',
-                text: `Query executed: ${result.command}, rows affected: ${result.rowCount}`,
+                text: JSON.stringify(
+                  { rows: result.rows, rowCount: result.rowCount, command: result.command },
+                  null,
+                  2
+                ),
               },
             ],
           };
         }
+        return {
+          content: [
+            { type: 'text', text: `Query executed: ${result.command}, rows affected: ${result.rowCount}` },
+          ],
+        };
       } catch (error: any) {
         return {
           content: [{ type: 'text', text: `Error: ${error.message}` }],
@@ -74,17 +93,12 @@ export function registerTools(server: McpServer, credentials: PostgresCredential
           ORDER BY table_schema, table_name;
         `;
         const result = await client.query(query, [schema || 'public']);
-        const tables = result.rows.map(row => ({
+        const tables = result.rows.map((row) => ({
           schema: row.table_schema,
           name: row.table_name,
         }));
         return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify(tables, null, 2),
-            },
-          ],
+          content: [{ type: 'text', text: JSON.stringify(tables, null, 2) }],
         };
       } catch (error: any) {
         return {

@@ -10,6 +10,14 @@ import { registerTools as registerPostgres } from '@/lib/adapters/postgres';
 import { registerTools as registerVercel } from '@/lib/adapters/vercel';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  // Tangani OPTIONS untuk CORS
+  if (req.method === 'OPTIONS') {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    return res.status(204).end();
+  }
+
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -34,11 +42,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(403).json({ error: 'Endpoint is inactive' });
     }
 
-    // Buat server
+    // ============================================================
+    // 🔥 NONAKTIFKAN OAuth UNTUK SEMENTARA (Testing)
+    // ============================================================
     const server = new McpServer({
       name: 'MCP Gateway Hub',
       version: '1.0.0',
+      // Tidak kirim metadata OAuth – client akan konek tanpa auth
     });
+    // ============================================================
 
     // Daftarkan tools
     for (const service of endpoint.services) {
@@ -57,6 +69,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           case 'vercel':
             registerVercel(server, { token: config.token, teamId: config.teamId });
             break;
+          default:
+            console.warn('[SSE] Unknown service type:', service.service_type);
         }
       } catch (err) {
         console.error('[SSE] Error registering service:', service.service_type, err);
@@ -67,7 +81,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const messagesPath = `/api/mcp/${id}/messages`;
     const transport = new SSEServerTransport(messagesPath, res);
 
-    // 🔥 Simpan transport dengan sessionId
     const sessionId = transport.sessionId;
     transports.set(sessionId, transport);
     console.log('[SSE] Transport saved with sessionId:', sessionId);
@@ -76,7 +89,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     await server.connect(transport);
     console.log('[SSE] Server connected');
 
-    // Transport akan mengelola response (SSE stream)
+    // CORS headers
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
   } catch (error: any) {
     console.error('[SSE] Error:', error);
     if (!res.headersSent) {
