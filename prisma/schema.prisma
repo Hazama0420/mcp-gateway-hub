@@ -9,17 +9,23 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// Tabel Akun Pengguna
+// ============================================
+// USER – lengkap dengan semua field untuk NextAuth
+// ============================================
 model User {
   id              String         @id @default(uuid())
+  name            String?        // Nama dari Google
   email           String         @unique
-  password_hash   String
+  emailVerified   DateTime?      // Untuk verifikasi email (NextAuth)
+  image           String?        // Foto profil dari Google
+  password_hash   String?        // Opsional untuk OAuth users
   created_at      DateTime       @default(now())
 
   endpoints       McpEndpoint[]
+  accounts        Account[]
+  sessions        Session[]
 }
 
-// Tabel Konfigurasi Endpoint MCP
 model McpEndpoint {
   id              String              @id @default(uuid())
   user_id         String
@@ -32,27 +38,63 @@ model McpEndpoint {
   logs            ExecutionLog[]
 }
 
-// Tabel Kredensial Layanan Terenkripsi
 model EndpointService {
   id                String    @id @default(uuid())
   endpoint_id       String
-  service_type      String    // 'github', 'supabase', 'vercel', 'custom'
-  encrypted_config  String    // JSON string terenkripsi (AES-256-GCM) → base64
-  iv                String    // Initialization Vector (base64)
-  tag               String    // Authentication Tag (base64)
+  service_type      String
+  encrypted_config  String
+  iv                String
+  tag               String
   created_at        DateTime  @default(now())
 
   endpoint          McpEndpoint @relation(fields: [endpoint_id], references: [id], onDelete: Cascade)
 }
 
-// Tabel Audit & Log Eksekusi
 model ExecutionLog {
   id                  String    @id @default(uuid())
   endpoint_id         String
   tool_name           String
-  status              String    // 'success', 'error'
+  status              String
   execution_time_ms   Int
   created_at          DateTime  @default(now())
 
   endpoint            McpEndpoint @relation(fields: [endpoint_id], references: [id], onDelete: Cascade)
+}
+
+// ============================================
+// NEXT AUTH MODELS (OTOMATIS DIGUNAKAN OLEH @auth/prisma-adapter)
+// ============================================
+model Account {
+  id                String  @id @default(uuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(uuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
 }
