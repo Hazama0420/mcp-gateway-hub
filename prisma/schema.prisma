@@ -1,5 +1,3 @@
-// prisma/schema.prisma
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -10,59 +8,152 @@ datasource db {
 }
 
 // ============================================
-// USER – lengkap dengan semua field untuk NextAuth
+// USER
 // ============================================
 model User {
-  id              String         @id @default(uuid())
-  name            String?        // Nama dari Google
-  email           String         @unique
-  emailVerified   DateTime?      // Untuk verifikasi email (NextAuth)
-  image           String?        // Foto profil dari Google
-  password_hash   String?        // Opsional untuk OAuth users
-  created_at      DateTime       @default(now())
+  id            String    @id @default(uuid())
+  name          String?
+  email         String    @unique
+  emailVerified DateTime?
+  image         String?
+  password_hash String?
+  created_at    DateTime  @default(now())
 
-  endpoints       McpEndpoint[]
-  accounts        Account[]
-  sessions        Session[]
-}
-
-model McpEndpoint {
-  id              String              @id @default(uuid())
-  user_id         String
-  name            String
-  is_active       Boolean             @default(true)
-  created_at      DateTime            @default(now())
-
-  user            User                @relation(fields: [user_id], references: [id], onDelete: Cascade)
-  services        EndpointService[]
-  logs            ExecutionLog[]
-}
-
-model EndpointService {
-  id                String    @id @default(uuid())
-  endpoint_id       String
-  service_type      String
-  encrypted_config  String
-  iv                String
-  tag               String
-  created_at        DateTime  @default(now())
-
-  endpoint          McpEndpoint @relation(fields: [endpoint_id], references: [id], onDelete: Cascade)
-}
-
-model ExecutionLog {
-  id                  String    @id @default(uuid())
-  endpoint_id         String
-  tool_name           String
-  status              String
-  execution_time_ms   Int
-  created_at          DateTime  @default(now())
-
-  endpoint            McpEndpoint @relation(fields: [endpoint_id], references: [id], onDelete: Cascade)
+  endpoints McpEndpoint[]
+  accounts  Account[]
+  sessions  Session[]
 }
 
 // ============================================
-// NEXT AUTH MODELS (OTOMATIS DIGUNAKAN OLEH @auth/prisma-adapter)
+// MCP ENDPOINT
+// ============================================
+model McpEndpoint {
+  id         String   @id @default(uuid())
+  user_id    String
+  name       String
+  is_active  Boolean  @default(true)
+  created_at DateTime @default(now())
+
+  user         User                  @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  services     EndpointService[]
+  logs         ExecutionLog[]
+  integrations EndpointIntegration[]
+}
+
+// ============================================
+// LEGACY / BUILT-IN ENDPOINT SERVICES
+// ============================================
+model EndpointService {
+  id               String   @id @default(uuid())
+  endpoint_id      String
+  service_type     String
+  encrypted_config String
+  iv               String
+  tag              String
+  created_at       DateTime @default(now())
+
+  endpoint McpEndpoint @relation(fields: [endpoint_id], references: [id], onDelete: Cascade)
+
+  @@index([endpoint_id])
+}
+
+// ============================================
+// EXECUTION LOG
+// ============================================
+model ExecutionLog {
+  id                String   @id @default(uuid())
+  endpoint_id       String
+  tool_name         String
+  status            String
+  execution_time_ms Int
+  created_at        DateTime @default(now())
+
+  endpoint McpEndpoint @relation(fields: [endpoint_id], references: [id], onDelete: Cascade)
+
+  @@index([endpoint_id])
+  @@index([created_at])
+}
+
+// ============================================
+// INTEGRATION BUILDER
+// Definisi global aplikasi/API yang dibuat admin
+// ============================================
+model Integration {
+  id          String   @id @default(uuid())
+  name        String
+  slug        String   @unique
+  description String?
+  icon        String?
+  category    String?
+  base_url    String
+  auth_type   String   @default("none")
+  auth_config Json?
+  is_active   Boolean  @default(true)
+  created_at  DateTime @default(now())
+  updated_at  DateTime @updatedAt
+
+  tools     IntegrationTool[]
+  endpoints EndpointIntegration[]
+
+  @@index([is_active])
+  @@index([category])
+}
+
+// ============================================
+// INTEGRATION TOOLS
+// Definisi MCP tool yang dibuat admin
+// ============================================
+model IntegrationTool {
+  id               String   @id @default(uuid())
+  integration_id   String
+  name             String
+  description      String?
+  method           String
+  path             String
+  input_schema     Json?
+  headers_template Json?
+  query_template   Json?
+  body_template    Json?
+  response_mapping Json?
+  permission       String   @default("read")
+  is_enabled       Boolean  @default(true)
+  created_at       DateTime @default(now())
+  updated_at       DateTime @updatedAt
+
+  integration Integration @relation(fields: [integration_id], references: [id], onDelete: Cascade)
+
+  @@unique([integration_id, name])
+  @@index([integration_id])
+  @@index([is_enabled])
+}
+
+// ============================================
+// ENDPOINT INTEGRATION
+// Menghubungkan integration global dengan
+// endpoint milik user
+// ============================================
+model EndpointIntegration {
+  id               String   @id @default(uuid())
+  endpoint_id      String
+  integration_id   String
+  encrypted_config String?
+  iv               String?
+  tag              String?
+  is_active        Boolean  @default(true)
+  created_at       DateTime @default(now())
+  updated_at       DateTime @updatedAt
+
+  endpoint    McpEndpoint @relation(fields: [endpoint_id], references: [id], onDelete: Cascade)
+  integration Integration @relation(fields: [integration_id], references: [id], onDelete: Cascade)
+
+  @@unique([endpoint_id, integration_id])
+  @@index([endpoint_id])
+  @@index([integration_id])
+  @@index([is_active])
+}
+
+// ============================================
+// NEXTAUTH - ACCOUNT
 // ============================================
 model Account {
   id                String  @id @default(uuid())
@@ -81,16 +172,26 @@ model Account {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([provider, providerAccountId])
+  @@index([userId])
 }
 
+// ============================================
+// NEXTAUTH - SESSION
+// ============================================
 model Session {
   id           String   @id @default(uuid())
   sessionToken String   @unique
   userId       String
   expires      DateTime
-  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }
 
+// ============================================
+// NEXTAUTH - VERIFICATION TOKEN
+// ============================================
 model VerificationToken {
   identifier String
   token      String   @unique
