@@ -59,7 +59,6 @@ async function createMcpServer(endpointId: string) {
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  // CORS Headers
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Accept, Authorization, MCP-Protocol-Version, Mcp-Session-Id, Last-Event-ID');
@@ -114,3 +113,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
   }
 }
+
+// PERHATIKAN: Kita TIDAK mengekspor config bodyParser di sini,
+// sehingga Next.js secara otomatis mem-parsing req.body sebagai JSON object.
