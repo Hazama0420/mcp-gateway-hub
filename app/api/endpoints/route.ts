@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/app/api/auth/[...nextauth]/route';
+import { encrypt } from '@/lib/crypto';
 
 export async function GET(req: Request) {
   try {
@@ -57,17 +58,28 @@ export async function POST(req: Request) {
     const body = await req.json();
     const { name, services } = body;
 
+    // Lakukan enkripsi otomatis di backend untuk setiap service agar iv & tag tidak kosong
+    const servicesWithEncryption = (services || []).map((service: any) => {
+      // Ubah config objek menjadi string JSON
+      const configString = JSON.stringify(service.config || {});
+      
+      // Panggil fungsi encrypt dari lib/crypto.ts
+      const { encryptedData, iv, tag } = encrypt(configString);
+
+      return {
+        service_type: service.type || service.service_type,
+        encrypted_config: encryptedData,
+        iv: iv,
+        tag: tag,
+      };
+    });
+
     const endpoint = await prisma.mcpEndpoint.create({
       data: {
         name,
-        user_id: user.id, // Sesuai kolom skema Prisma
+        user_id: user.id,
         services: {
-          create: services.map((service: any) => ({
-            service_type: service.type,
-            encrypted_config: service.encrypted_config || '',
-            iv: service.iv || '',
-            tag: service.tag || '',
-          })),
+          create: servicesWithEncryption,
         },
       },
       include: { services: true },
