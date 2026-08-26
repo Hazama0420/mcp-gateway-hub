@@ -1,5 +1,5 @@
 // lib/adapters/postgres.ts
-import { McpServer } from '@modelcontextprotocol/sdk';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { Pool, PoolConfig } from 'pg';
 

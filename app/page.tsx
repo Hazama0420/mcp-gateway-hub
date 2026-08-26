@@ -1,3 +1,4 @@
+// app/page.tsx
 'use client';
 
 import {
@@ -6,6 +7,8 @@ import {
   useState,
   type ElementType,
 } from 'react';
+
+import Link from 'next/link';
 
 import {
   Activity,
@@ -80,7 +83,7 @@ interface Endpoint {
 interface Log {
   id: string;
   tool_name: string;
-  status: 'success' | 'error';
+  status: string; // <-- Diubah dari 'success' | 'error' ke string karena database mencatat HTTP Code
   execution_time_ms: number;
   created_at: string;
 }
@@ -144,9 +147,11 @@ export default function DashboardPage() {
 
       if (logsRes.ok) {
         const data = await logsRes.json();
-
-        if (Array.isArray(data)) {
-          setLogs(data);
+        // Cek struktur response dari logs (data.logs atau langsung data)
+        const logsData = data.logs ? data.logs : data;
+        
+        if (Array.isArray(logsData)) {
+          setLogs(logsData);
         }
       }
     } catch (error) {
@@ -288,9 +293,10 @@ export default function DashboardPage() {
         (endpoint) => endpoint.is_active
       ).length;
 
+    // Perbaiki pengecekan success status karena sekarang tercatat sebagai HTTP status (200 OK)
     const successfulLogs =
       logs.filter(
-        (log) => log.status === 'success'
+        (log) => String(log.status).startsWith('2') || log.status === 'OK' || log.status === 'success'
       ).length;
 
     const averageExecutionTime =
@@ -356,15 +362,28 @@ export default function DashboardPage() {
                   </p>
                 </div>
 
-                <Button
-                  onClick={() =>
-                    setIsModalOpen(true)
-                  }
-                  className="h-11 rounded-xl bg-emerald-500 px-5 font-medium text-slate-950 shadow-lg shadow-emerald-500/10 hover:bg-emerald-400"
-                >
-                  <Plus className="mr-2 h-4 w-4" />
-                  New Endpoint
-                </Button>
+                {/* Action Buttons Group */}
+                <div className="flex flex-wrap items-center gap-3">
+                  <Link href="/admin/playground">
+                    <Button
+                      variant="outline"
+                      className="h-11 rounded-xl border-white/10 bg-white/[0.03] px-4 font-medium text-slate-300 backdrop-blur-sm transition hover:border-emerald-500/30 hover:bg-white/[0.07] hover:text-white"
+                    >
+                      <Terminal className="mr-2 h-4 w-4 text-emerald-400" />
+                      Tool Playground
+                    </Button>
+                  </Link>
+
+                  <Button
+                    onClick={() =>
+                      setIsModalOpen(true)
+                    }
+                    className="h-11 rounded-xl bg-emerald-500 px-5 font-medium text-slate-950 shadow-lg shadow-emerald-500/10 hover:bg-emerald-400"
+                  >
+                    <Plus className="mr-2 h-4 w-4" />
+                    New Endpoint
+                  </Button>
+                </div>
               </div>
 
               <div className="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -1106,7 +1125,11 @@ function EndpointManagePanel({
                       const meta =
                         serviceMeta[
                           service.service_type
-                        ];
+                        ] ?? {
+                          label:
+                            service.service_type,
+                          icon: Database,
+                        };
 
                       const Icon =
                         meta?.icon ??
@@ -1303,17 +1326,19 @@ function ActivityRow({
 }: {
   log: Log;
 }) {
+  const isSuccess = String(log.status).startsWith('2') || log.status === 'OK' || log.status === 'success';
+
   return (
     <div className="p-5 transition hover:bg-white/[0.018]">
       <div className="flex items-start gap-3">
         <div
           className={`mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${
-            log.status === 'success'
+            isSuccess
               ? 'bg-emerald-500/10 text-emerald-400'
               : 'bg-red-500/10 text-red-400'
           }`}
         >
-          {log.status === 'success' ? (
+          {isSuccess ? (
             <Check className="h-4 w-4" />
           ) : (
             <Activity className="h-4 w-4" />
@@ -1340,7 +1365,7 @@ function ActivityRow({
             <Badge
               variant="outline"
               className={
-                log.status === 'success'
+                isSuccess
                   ? 'border-emerald-500/20 text-emerald-400'
                   : 'border-red-500/20 text-red-400'
               }

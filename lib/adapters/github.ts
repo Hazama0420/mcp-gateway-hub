@@ -1,6 +1,6 @@
 // lib/adapters/github.ts
 
-import { McpServer } from '@modelcontextprotocol/sdk';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 
 interface GitHubCredentials {
