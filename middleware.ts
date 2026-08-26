@@ -7,7 +7,7 @@ export default withAuth(
   function middleware(request: NextRequest) {
     const response = NextResponse.next();
 
-    // Jika request menuju ke rute /api/:path*, tambahkan Header CORS
+    // Tambahkan Header CORS secara universal untuk semua rute /api
     if (request.nextUrl.pathname.startsWith('/api')) {
       response.headers.set('Access-Control-Allow-Origin', '*');
       response.headers.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
@@ -22,6 +22,11 @@ export default withAuth(
       authorized: ({ token, req }) => {
         const path = req.nextUrl.pathname;
         
+        // Izinkan method OPTIONS (CORS preflight) agar tidak tertahan otentikasi
+        if (req.method === 'OPTIONS') {
+          return true;
+        }
+
         // Bebaskan akses untuk rute auth, halaman login, dan SELURUH rute /api/mcp/
         if (
           path.startsWith('/api/auth') || 
@@ -31,7 +36,7 @@ export default withAuth(
           return true;
         }
 
-        // Rute lainnya tetap wajib login
+        // Rute dashboard/admin lainnya wajib memiliki token login
         return !!token;
       },
     },
@@ -40,6 +45,7 @@ export default withAuth(
 
 export const config = {
   matcher: [
+    // Jangan ubah matcher ini agar middleware tetap memantau rute API & halaman yang perlu dilindungi
     '/((?!_next/static|_next/image|favicon.ico).*)',
   ],
 };
