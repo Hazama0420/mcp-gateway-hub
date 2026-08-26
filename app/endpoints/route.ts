@@ -8,23 +8,15 @@ export async function GET(req: Request) {
   try {
     const session = await getServerSession(authOptions);
     
+    // Tolak akses jika belum login
     if (!session?.user?.email) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    // Cari user berdasarkan email untuk mendapatkan ID
-    const user = await prisma.user.findUnique({
-      where: { email: session.user.email }
-    });
-
-    if (!user) {
-      return NextResponse.json({ error: 'User not found' }, { status: 404 });
-    }
-
-    // Ambil McpEndpoint HANYA milik user_id yang sedang login
-    const endpoints = await prisma.mcpEndpoint.findMany({
+    // Ambil endpoint HANYA yang dimiliki oleh email user yang login
+    const endpoints = await prisma.endpoint.findMany({
       where: {
-        user_id: user.id
+        user: { email: session.user.email }
       },
       include: {
         services: true,
@@ -34,7 +26,6 @@ export async function GET(req: Request) {
 
     return NextResponse.json(endpoints);
   } catch (error) {
-    console.error('Fetch endpoints error:', error);
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
   }
 }
@@ -46,27 +37,22 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
+    const body = await req.json();
+    const { name, services } = body;
+
+    // Cari ID user berdasarkan email
     const user = await prisma.user.findUnique({
       where: { email: session.user.email }
     });
 
-    if (!user) {
-      return NextResponse.json({ error: 'User not found' }, { status: 404 });
-    }
-
-    const body = await req.json();
-    const { name, services } = body;
-
-    const endpoint = await prisma.mcpEndpoint.create({
+    const endpoint = await prisma.endpoint.create({
       data: {
         name,
-        user_id: user.id, // Sesuai kolom skema Prisma
+        userId: user?.id, // <-- Kaitkan endpoint baru dengan User ID ini
         services: {
           create: services.map((service: any) => ({
             service_type: service.type,
-            encrypted_config: service.encrypted_config || '',
-            iv: service.iv || '',
-            tag: service.tag || '',
+            config: service.config || {},
           })),
         },
       },
@@ -75,7 +61,6 @@ export async function POST(req: Request) {
 
     return NextResponse.json(endpoint, { status: 201 });
   } catch (error) {
-    console.error('Create endpoint error:', error);
     return NextResponse.json({ error: 'Failed to create endpoint' }, { status: 500 });
   }
 }
@@ -87,22 +72,16 @@ export async function DELETE(req: Request) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const user = await prisma.user.findUnique({
-      where: { email: session.user.email }
-    });
-
-    if (!user) return NextResponse.json({ error: 'User not found' }, { status: 404 });
-
     const url = new URL(req.url);
     const id = url.searchParams.get('id');
 
     if (!id) return NextResponse.json({ error: 'ID is required' }, { status: 400 });
 
-    // Pastikan endpoint milik user yang sedang aktif
-    const existing = await prisma.mcpEndpoint.findFirst({
+    // Cek apakah endpoint ini benar-benar milik user yang sedang login
+    const existing = await prisma.endpoint.findFirst({
       where: { 
         id, 
-        user_id: user.id 
+        user: { email: session.user.email } 
       }
     });
 
@@ -110,10 +89,9 @@ export async function DELETE(req: Request) {
       return NextResponse.json({ error: 'Endpoint not found or unauthorized' }, { status: 404 });
     }
 
-    await prisma.mcpEndpoint.delete({ where: { id } });
+    await prisma.endpoint.delete({ where: { id } });
     return NextResponse.json({ success: true });
   } catch (error) {
-    console.error('Delete endpoint error:', error);
     return NextResponse.json({ error: 'Failed to delete' }, { status: 500 });
   }
 }

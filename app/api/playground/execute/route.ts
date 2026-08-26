@@ -1,28 +1,49 @@
 // app/api/playground/execute/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
+import { getServerSession } from 'next-auth';
+import { authOptions } from '@/app/api/auth/[...nextauth]/route';
 
 export const dynamic = 'force-dynamic';
 
 export async function POST(req: NextRequest) {
   const startTime = performance.now();
   try {
+    // 0. Validasi Sesi Login NextAuth
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.email) {
+      return NextResponse.json({ error: 'Unauthorized - Silakan login terlebih dahulu' }, { status: 401 });
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { email: session.user.email }
+    });
+
+    if (!user) {
+      return NextResponse.json({ error: 'User tidak ditemukan' }, { status: 404 });
+    }
+
     const { toolId, args } = await req.json();
 
     if (!toolId) {
       return NextResponse.json({ error: 'toolId wajib disertakan' }, { status: 400 });
     }
 
-    // 1. Ambil data tool beserta config integrasinya
-    const tool = await prisma.integrationTool.findUnique({
-      where: { id: toolId },
+    // 1. Ambil data tool beserta config integrasinya, pastikan milik user yang aktif
+    const tool = await prisma.integrationTool.findFirst({
+      where: { 
+        id: toolId,
+        integration: {
+          user_id: user.id // <-- Keamanan tambahan: Isolasi kepemilikan multi-tenant
+        }
+      },
       include: {
         integration: true,
       },
     });
 
     if (!tool) {
-      return NextResponse.json({ error: 'Tool tidak ditemukan di database' }, { status: 404 });
+      return NextResponse.json({ error: 'Tool tidak ditemukan atau Anda tidak memiliki akses' }, { status: 404 });
     }
 
     const integration = tool.integration;
@@ -82,7 +103,7 @@ export async function POST(req: NextRequest) {
       requestBody = JSON.stringify(passedArgs);
     }
 
-    // 5. Eksekusi Request ke API Asli (misal: Petstore)
+    // 5. Eksekusi Request ke API Asli
     const fetchRes = await fetch(targetUrl, {
       method,
       headers,

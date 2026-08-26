@@ -46,6 +46,8 @@ import {
   MobileNavigation,
 } from '@/components/AppNavigation';
 
+import { DashboardHeader } from '@/components/DashboardHeader'; // <-- Header baru login/logout
+
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -83,7 +85,7 @@ interface Endpoint {
 interface Log {
   id: string;
   tool_name: string;
-  status: string; // <-- Diubah dari 'success' | 'error' ke string karena database mencatat HTTP Code
+  status: string;
   execution_time_ms: number;
   created_at: string;
 }
@@ -147,7 +149,6 @@ export default function DashboardPage() {
 
       if (logsRes.ok) {
         const data = await logsRes.json();
-        // Cek struktur response dari logs (data.logs atau langsung data)
         const logsData = data.logs ? data.logs : data;
         
         if (Array.isArray(logsData)) {
@@ -293,7 +294,6 @@ export default function DashboardPage() {
         (endpoint) => endpoint.is_active
       ).length;
 
-    // Perbaiki pengecekan success status karena sekarang tercatat sebagai HTTP status (200 OK)
     const successfulLogs =
       logs.filter(
         (log) => String(log.status).startsWith('2') || log.status === 'OK' || log.status === 'success'
@@ -331,10 +331,11 @@ export default function DashboardPage() {
       <div className="flex min-h-screen">
         <AppNavigation />
 
-        <div className="min-w-0 flex-1">
+        <div className="min-w-0 flex-1 flex flex-col min-h-screen">
           <MobileNavigation />
+          <DashboardHeader /> {/* <-- Header Terpasang di Sini */}
 
-          <div className="relative">
+          <div className="relative flex-1">
             <div className="pointer-events-none fixed inset-0 overflow-hidden">
               <div className="absolute left-[-8%] top-[-10%] h-[420px] w-[420px] rounded-full bg-emerald-500/10 blur-[120px]" />
               <div className="absolute right-[-8%] top-0 h-[400px] w-[400px] rounded-full bg-cyan-500/10 blur-[120px]" />

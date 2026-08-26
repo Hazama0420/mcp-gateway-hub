@@ -1,33 +1,49 @@
+// middleware.ts
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
+import { withAuth } from 'next-auth/middleware';
 
-export function middleware(request: NextRequest) {
-  const response = NextResponse.next();
+export default withAuth(
+  function middleware(request: NextRequest) {
+    const response = NextResponse.next();
 
-  // CORS untuk API
-  response.headers.set(
-    'Access-Control-Allow-Origin',
-    '*'
-  );
+    // Jika request menuju ke rute /api/:path*, tambahkan Header CORS
+    if (request.nextUrl.pathname.startsWith('/api')) {
+      response.headers.set('Access-Control-Allow-Origin', '*');
+      response.headers.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+      response.headers.set('Access-Control-Allow-Headers', 'Content-Type, Accept, Authorization, MCP-Protocol-Version, Last-Event-ID, api_key');
+      response.headers.set('Access-Control-Expose-Headers', 'Mcp-Session-Id, WWW-Authenticate');
+    }
 
-  response.headers.set(
-    'Access-Control-Allow-Methods',
-    'GET, POST, OPTIONS'
-  );
+    return response;
+  },
+  {
+    callbacks: {
+      authorized: ({ token, req }) => {
+        const path = req.nextUrl.pathname;
+        
+        // Bebaskan akses untuk rute auth NextAuth, halaman login, dan endpoint API publik jika diperlukan
+        if (path.startsWith('/api/auth') || path.startsWith('/login')) {
+          return true;
+        }
 
-  response.headers.set(
-    'Access-Control-Allow-Headers',
-    'Content-Type, Accept, Authorization, MCP-Protocol-Version, Last-Event-ID'
-  );
-
-  response.headers.set(
-    'Access-Control-Expose-Headers',
-    'Mcp-Session-Id, WWW-Authenticate'
-  );
-
-  return response;
-}
+        // Untuk rute /api MCP client (misal /api/mcp/... atau /api/endpoints), 
+        // Anda bisa sesuaikan apakah butuh token atau dibiarkan publik untuk bot AI.
+        // Jika seluruh dashboard admin & API wajib login, cukup pastikan token ada:
+        return !!token;
+      },
+    },
+  }
+);
 
 export const config = {
-  matcher: '/api/:path*',
+  matcher: [
+    /*
+     * Match all request paths except for:
+     * - _next/static (static files)
+     * - _next/image (image optimization files)
+     * - favicon.ico (favicon file)
+     */
+    '/((?!_next/static|_next/image|favicon.ico).*)',
+  ],
 };
