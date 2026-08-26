@@ -1,0 +1,15 @@
+{
+    "method":  "initialize",
+    "params":  {
+                   "clientInfo":  {
+                                      "version":  "1.0.0",
+                                      "name":  "manual-test"
+                                  },
+                   "protocolVersion":  "2024-11-05",
+                   "capabilities":  {
+
+                                    }
+               },
+    "id":  1,
+    "jsonrpc":  "2.0"
+}
