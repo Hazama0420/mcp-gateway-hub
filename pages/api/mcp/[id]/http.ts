@@ -1,3 +1,4 @@
+// pages/api/mcp/[id]/http.ts
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
@@ -19,20 +20,12 @@ const sessions = new Map<string, SessionEntry>();
 
 async function createMcpServer(endpointId: string) {
   const endpoint = await prisma.mcpEndpoint.findUnique({
-    where: {
-      id: endpointId,
-    },
-    include: {
-      services: true,
-    },
+    where: { id: endpointId },
+    include: { services: true },
   });
 
-  if (!endpoint) {
-    throw new Error('Endpoint not found');
-  }
-
-  if (!endpoint.is_active) {
-    throw new Error('Endpoint is inactive');
+  if (!endpoint || !endpoint.is_active) {
+    throw new Error('Endpoint not found or inactive');
   }
 
   const server = new McpServer({
@@ -42,223 +35,82 @@ async function createMcpServer(endpointId: string) {
 
   for (const service of endpoint.services) {
     try {
-      console.log(
-        '[HTTP] Registering service:',
-        service.service_type
-      );
-
-      const decryptedJson = decrypt(
-        service.encrypted_config,
-        service.iv,
-        service.tag
-      );
-
+      const decryptedJson = decrypt(service.encrypted_config, service.iv, service.tag);
       const config = JSON.parse(decryptedJson);
 
       switch (service.service_type) {
         case 'github':
-          registerGithub(server, {
-            token: config.token,
-          });
+          registerGithub(server, { token: config.token });
           break;
-
         case 'supabase':
         case 'postgres':
-          registerPostgres(server, {
-            connectionString: config.connectionString,
-          });
+          registerPostgres(server, { connectionString: config.connectionString });
           break;
-
         case 'vercel':
-          registerVercel(server, {
-            token: config.token,
-            teamId: config.teamId,
-          });
+          registerVercel(server, { token: config.token, teamId: config.teamId });
           break;
-
-        default:
-          console.warn(
-            '[HTTP] Unknown service type:',
-            service.service_type
-          );
       }
     } catch (error) {
-      console.error(
-        '[HTTP] Error registering service:',
-        service.service_type,
-        error
-      );
+      console.error('[HTTP] Error registering service:', service.service_type, error);
     }
   }
 
   return server;
 }
 
-export default async function handler(
-  req: NextApiRequest,
-  res: NextApiResponse
-) {
-  console.log('[HTTP] Request:', {
-    method: req.method,
-    url: req.url,
-    sessionId: req.headers['mcp-session-id'],
-  });
-
-  // CORS
-  res.setHeader(
-    'Access-Control-Allow-Origin',
-    '*'
-  );
-
-  res.setHeader(
-    'Access-Control-Allow-Methods',
-    'GET, POST, DELETE, OPTIONS'
-  );
-
-  res.setHeader(
-    'Access-Control-Allow-Headers',
-    [
-      'Content-Type',
-      'Accept',
-      'Authorization',
-      'MCP-Protocol-Version',
-      'Mcp-Session-Id',
-      'Last-Event-ID',
-    ].join(', ')
-  );
-
-  res.setHeader(
-    'Access-Control-Expose-Headers',
-    'Mcp-Session-Id, WWW-Authenticate'
-  );
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  // CORS Headers
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Accept, Authorization, MCP-Protocol-Version, Mcp-Session-Id, Last-Event-ID');
+  res.setHeader('Access-Control-Expose-Headers', 'Mcp-Session-Id, WWW-Authenticate');
 
   if (req.method === 'OPTIONS') {
     return res.status(204).end();
   }
 
   const { id } = req.query;
-
   if (!id || Array.isArray(id)) {
-    return res.status(400).json({
-      error: 'Invalid endpoint id',
-    });
+    return res.status(400).json({ error: 'Invalid endpoint id' });
   }
 
   try {
-    const sessionId =
-      req.headers['mcp-session-id'] as
-        | string
-        | undefined;
+    const sessionId = req.headers['mcp-session-id'] as string | undefined;
 
-    /*
-     * Existing Streamable HTTP session
-     */
     if (sessionId) {
-      const existing =
-        sessions.get(sessionId);
-
+      const existing = sessions.get(sessionId);
       if (!existing) {
-        return res.status(404).json({
-          error: 'Session not found',
-        });
+        return res.status(404).json({ error: 'Session not found' });
       }
-
-      await existing.transport.handleRequest(
-        req,
-        res,
-        req.body
-      );
-
+      await existing.transport.handleRequest(req, res, req.body);
       return;
     }
 
-    /*
-     * New session must start with initialize
-     */
-    if (
-      req.method === 'POST' &&
-      isInitializeRequest(req.body)
-    ) {
-      console.log(
-        '[HTTP] New MCP initialize request'
-      );
+    if (req.method === 'POST' && isInitializeRequest(req.body)) {
+      const server = await createMcpServer(id);
+      let initializedSessionId: string | undefined;
 
-      const server =
-        await createMcpServer(id);
-
-      let initializedSessionId:
-        | string
-        | undefined;
-
-      const transport =
-        new StreamableHTTPServerTransport({
-          sessionIdGenerator: () => crypto.randomUUID(),
-
-          onsessioninitialized: (
-            newSessionId
-          ) => {
-            initializedSessionId =
-              newSessionId;
-
-            sessions.set(
-              newSessionId,
-              {
-                transport,
-                server,
-              }
-            );
-
-            console.log(
-              '[HTTP] Session created:',
-              newSessionId
-            );
-          },
-
-          onsessionclosed: (
-            closedSessionId
-          ) => {
-            sessions.delete(
-              closedSessionId
-            );
-
-            console.log(
-              '[HTTP] Session closed:',
-              closedSessionId
-            );
-          },
-        });
+      const transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: () => crypto.randomUUID(),
+        onsessioninitialized: (newSessionId) => {
+          initializedSessionId = newSessionId;
+          sessions.set(newSessionId, { transport, server });
+        },
+        onsessionclosed: (closedSessionId) => {
+          sessions.delete(closedSessionId);
+        },
+      });
 
       await server.connect(transport);
-
-      await transport.handleRequest(
-        req,
-        res,
-        req.body
-      );
-
+      await transport.handleRequest(req, res, req.body);
       return;
     }
 
-    /*
-     * No session and not initialize
-     */
-    return res.status(400).json({
-      error:
-        'Missing MCP session. First request must be initialize.',
-    });
-  } catch (error) {
-    console.error(
-      '[HTTP] MCP error:',
-      error
-    );
-
+    return res.status(400).json({ error: 'Missing MCP session or initialize request' });
+  } catch (error: any) {
+    console.error('[HTTP] MCP error:', error);
     if (!res.headersSent) {
-      return res.status(500).json({
-        error:
-          error instanceof Error
-            ? error.message
-            : String(error),
-      });
+      return res.status(500).json({ error: error.message });
     }
   }
 }

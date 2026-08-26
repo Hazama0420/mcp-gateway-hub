@@ -11,7 +11,7 @@ export default withAuth(
     if (request.nextUrl.pathname.startsWith('/api')) {
       response.headers.set('Access-Control-Allow-Origin', '*');
       response.headers.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-      response.headers.set('Access-Control-Allow-Headers', 'Content-Type, Accept, Authorization, MCP-Protocol-Version, Last-Event-ID, api_key');
+      response.headers.set('Access-Control-Allow-Headers', 'Content-Type, Accept, Authorization, MCP-Protocol-Version, Last-Event-ID, api_key, mcp-session-id');
       response.headers.set('Access-Control-Expose-Headers', 'Mcp-Session-Id, WWW-Authenticate');
     }
 
@@ -22,14 +22,16 @@ export default withAuth(
       authorized: ({ token, req }) => {
         const path = req.nextUrl.pathname;
         
-        // Bebaskan akses untuk rute auth NextAuth, halaman login, dan endpoint API publik jika diperlukan
-        if (path.startsWith('/api/auth') || path.startsWith('/login')) {
+        // Bebaskan akses untuk rute auth, halaman login, dan SELURUH rute /api/mcp/
+        if (
+          path.startsWith('/api/auth') || 
+          path.startsWith('/login') || 
+          path.startsWith('/api/mcp/')
+        ) {
           return true;
         }
 
-        // Untuk rute /api MCP client (misal /api/mcp/... atau /api/endpoints), 
-        // Anda bisa sesuaikan apakah butuh token atau dibiarkan publik untuk bot AI.
-        // Jika seluruh dashboard admin & API wajib login, cukup pastikan token ada:
+        // Rute lainnya tetap wajib login
         return !!token;
       },
     },
@@ -38,12 +40,6 @@ export default withAuth(
 
 export const config = {
   matcher: [
-    /*
-     * Match all request paths except for:
-     * - _next/static (static files)
-     * - _next/image (image optimization files)
-     * - favicon.ico (favicon file)
-     */
     '/((?!_next/static|_next/image|favicon.ico).*)',
   ],
 };
