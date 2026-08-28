@@ -7,8 +7,10 @@ import {
   type FormEvent,
 } from 'react';
 
+import Link from 'next/link';
 import {
   Activity,
+  Boxes,
   Check,
   ChevronDown,
   ChevronUp,
@@ -17,6 +19,7 @@ import {
   Loader2,
   Pencil,
   Plus,
+  PlaySquare,
   Search,
   Server,
   Shield,
@@ -35,10 +38,7 @@ import {
   CardTitle,
 } from '@/components/ui/card';
 
-import {
-  AppNavigation,
-  MobileNavigation,
-} from '@/components/AppNavigation';
+import { AppShell } from '@/components/AppShell';
 
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
@@ -606,37 +606,18 @@ export default function IntegrationsAdminPage() {
   });
 
   return (
-    <div className="min-h-screen bg-[#060b10] text-white">
-      <div className="flex min-h-screen">
-        <AppNavigation />
-
-        <div className="min-w-0 flex-1">
-          <MobileNavigation />
-
-          <div className="relative">
-            <div className="pointer-events-none fixed inset-0 overflow-hidden">
-              <div className="absolute left-[-10%] top-[-10%] h-[420px] w-[420px] rounded-full bg-emerald-500/10 blur-[120px]" />
-              <div className="absolute right-[-10%] top-[5%] h-[360px] w-[360px] rounded-full bg-cyan-500/10 blur-[120px]" />
-            </div>
-
-            <main className="relative z-10 mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
-              <div className="mb-8 flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
-                <div>
-                  <div className="mb-3 flex items-center gap-2 text-xs font-medium uppercase tracking-[0.18em] text-emerald-400">
-                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
-                    Admin
-                    <span className="text-slate-700">/</span>
-                    Integrations
-                  </div>
-
-                  <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">
-                    Integrations
-                  </h1>
-
-                  <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-500">
-                    Connect APIs to your MCP Gateway without writing a new adapter.
-                  </p>
-                </div>
+    <AppShell>
+      <div className="space-y-6">
+        <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
+          <div>
+            <h1 className="text-2xl font-bold tracking-tight text-white flex items-center gap-2.5">
+              <Boxes className="h-6 w-6 text-emerald-400" />
+              Integrations
+            </h1>
+            <p className="mt-1 text-xs text-slate-400">
+              Connect external REST APIs and PostgreSQL databases to your MCP Gateway.
+            </p>
+          </div>
 
                 <div className="flex flex-wrap items-center gap-3">
                   <Button
@@ -731,7 +712,7 @@ export default function IntegrationsAdminPage() {
                   )}
                 </CardContent>
               </Card>
-            </main>
+            </div>
 
             {showBuilder && (
               <IntegrationBuilder
@@ -775,10 +756,7 @@ export default function IntegrationsAdminPage() {
               onOpenChange={setShowOpenApiModal}
               onImportSuccess={handleOpenApiImportSuccess}
             />
-          </div>
-        </div>
-      </div>
-    </div>
+    </AppShell>
   );
 }
 
@@ -822,88 +800,89 @@ function IntegrationCard({
   onDelete: () => void;
 }) {
   return (
-    <Card className="group rounded-2xl border-white/[0.07] bg-black/10 transition hover:border-emerald-500/20 hover:bg-white/[0.03]">
+    <Card className="pop-card pop-card-hover group bg-[var(--color-surface)] text-[var(--color-text-primary)] border-2 border-[var(--color-border)] shadow-[4px_4px_0px_0px_rgba(15,23,42,1)] rounded-2xl">
       <CardContent className="p-5">
         <div className="flex items-start justify-between gap-4">
           <div className="flex min-w-0 items-start gap-4">
-            <IntegrationIcon icon={integration.icon || 'globe'} />
+            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-violet-300 dark:bg-violet-600 text-slate-950 border-2 border-[var(--color-border)] shadow-[2px_2px_0px_0px_rgba(15,23,42,1)]">
+              <IntegrationIcon icon={integration.icon || 'globe'} />
+            </div>
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2">
-                <h3 className="truncate font-semibold text-white">
+                <h3 className="truncate font-black text-sm text-[var(--color-text-primary)] font-mono">
                   {integration.name}
                 </h3>
-                <Badge
-                  className={
-                    integration.is_active
-                      ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-400'
-                      : 'border-white/[0.07] bg-white/[0.03] text-slate-600'
-                  }
-                >
-                  {integration.is_active ? 'Active' : 'Disabled'}
-                </Badge>
+                <StatusBadge status={integration.is_active ? 'ACTIVE' : 'INACTIVE'} size="sm" />
               </div>
-              <p className="mt-1 font-mono text-xs text-slate-700">
+              <p className="mt-0.5 font-mono text-xs text-[var(--color-text-muted)] font-bold">
                 {integration.slug}
               </p>
-              <p className="mt-2 line-clamp-2 text-xs leading-5 text-slate-500">
+              <p className="mt-2 line-clamp-2 text-xs leading-5 text-[var(--color-text-secondary)] font-medium">
                 {integration.description || 'No description provided.'}
               </p>
             </div>
           </div>
 
-          <div className="flex gap-1">
+          <div className="flex gap-1.5">
             <Button
               variant="ghost"
               size="icon"
               onClick={onEdit}
-              className="rounded-xl text-slate-600 hover:bg-white/[0.05] hover:text-white"
+              className="pop-btn h-8 w-8 text-[var(--color-text-primary)] hover:bg-amber-300 bg-[var(--color-surface-elevated)]"
+              aria-label="Edit integration"
             >
-              <Pencil className="h-4 w-4" />
+              <Pencil className="h-4 w-4 stroke-[2.5]" />
             </Button>
             <Button
               variant="ghost"
               size="icon"
               disabled={deleting}
               onClick={onDelete}
-              className="rounded-xl text-slate-600 hover:bg-red-500/10 hover:text-red-400"
+              className="pop-btn h-8 w-8 text-rose-600 hover:bg-rose-100 bg-[var(--color-surface-elevated)]"
+              aria-label="Delete integration"
             >
               {deleting ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
               ) : (
-                <Trash2 className="h-4 w-4" />
+                <Trash2 className="h-4 w-4 stroke-[2.5]" />
               )}
             </Button>
           </div>
         </div>
 
-        <div className="mt-5 rounded-xl border border-white/[0.06] bg-white/[0.015] p-3">
-          <div className="flex items-center gap-2 text-xs text-slate-500">
-            <Globe2 className="h-3.5 w-3.5 text-slate-600" />
-            <span className="truncate">{integration.base_url}</span>
+        <div className="mt-4 rounded-xl border-2 border-[var(--color-border)] bg-[var(--color-surface-elevated)] p-2.5 shadow-[2px_2px_0px_0px_rgba(15,23,42,1)]">
+          <div className="flex items-center gap-2 text-xs text-[var(--color-text-secondary)]">
+            <Globe2 className="h-3.5 w-3.5 text-[var(--color-text-muted)] stroke-[2.5]" />
+            <span className="truncate font-mono text-[11px] font-bold">{integration.base_url}</span>
           </div>
         </div>
 
-        <div className="mt-4 flex flex-wrap gap-2">
-          <Badge
-            variant="outline"
-            className="border-white/[0.07] text-slate-600"
+        <div className="mt-4 flex items-center justify-between pt-3 border-t-2 border-black/5 dark:border-white/5 flex-wrap gap-2">
+          <div className="flex flex-wrap gap-1.5 font-mono font-bold">
+            <span className="pop-badge bg-[var(--color-surface-elevated)] text-[var(--color-text-secondary)] text-[10px]">
+              {integration.auth_type}
+            </span>
+            <span className="pop-badge bg-[var(--color-surface-elevated)] text-[var(--color-text-secondary)] text-[10px]">
+              {integration.tools.length} tools
+            </span>
+            {integration.category && (
+              <span className="pop-badge bg-[var(--color-surface-elevated)] text-[var(--color-text-secondary)] text-[10px]">
+                {integration.category}
+              </span>
+            )}
+          </div>
+
+          <Button
+            asChild
+            variant="ghost"
+            size="sm"
+            className="pop-btn h-7 px-2.5 text-xs bg-amber-300 text-slate-950 hover:bg-amber-200 font-black gap-1 font-mono"
           >
-            {integration.auth_type}
-          </Badge>
-          <Badge
-            variant="outline"
-            className="border-white/[0.07] text-slate-600"
-          >
-            {integration.tools.length} tools
-          </Badge>
-          {integration.category && (
-            <Badge
-              variant="outline"
-              className="border-white/[0.07] text-slate-600"
-            >
-              {integration.category}
-            </Badge>
-          )}
+            <Link href={`/admin/playground?integration=${integration.id}`}>
+              <PlaySquare className="h-3.5 w-3.5 stroke-[2.5]" />
+              <span>Test in Playground →</span>
+            </Link>
+          </Button>
         </div>
       </CardContent>
     </Card>

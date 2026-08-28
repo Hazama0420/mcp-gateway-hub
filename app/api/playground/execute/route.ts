@@ -7,6 +7,7 @@ import { safeFetch, validateUrlSyntax, MAX_RESPONSE_BYTES } from '@/lib/security
 import { checkRateLimit, applyRateLimitHeaders, LIMITS } from '@/lib/security/ratelimit';
 import { decryptAuthConfig } from '@/lib/crypto';
 import { recordExecutionLog, recordSecurityEvent, generateExecutionId } from '@/lib/security/audit';
+import { executeEndpointTool } from '@/lib/mcpServer';
 
 export const dynamic = 'force-dynamic';
 
@@ -50,10 +51,78 @@ export async function POST(req: NextRequest) {
       return response;
     }
 
-    const { toolId, args } = await req.json();
+    const body = await req.json();
+    const { endpointId, toolName, toolId, args } = body;
 
+    // =========================================================================
+    // MODE B: MCP Endpoint Tool Execution
+    // =========================================================================
+    if (endpointId && toolName) {
+      const endpoint = await prisma.mcpEndpoint.findFirst({
+        where: {
+          id: endpointId,
+          user_id: user.id, // Strict multi-tenant isolation
+        },
+        include: {
+          services: true,
+        },
+      });
+
+      if (!endpoint) {
+        return NextResponse.json(
+          {
+            success: false,
+            status: 404,
+            statusText: 'NOT_FOUND',
+            latencyMs: Math.round(performance.now() - startTime),
+            error: 'MCP Endpoint not found or unauthorized',
+          },
+          { status: 404 }
+        );
+      }
+
+      if (!endpoint.is_active) {
+        return NextResponse.json(
+          {
+            success: false,
+            status: 400,
+            statusText: 'ENDPOINT_INACTIVE',
+            latencyMs: Math.round(performance.now() - startTime),
+            error: 'This MCP Endpoint is currently paused/inactive. Please enable it in Endpoint settings.',
+          },
+          { status: 400 }
+        );
+      }
+
+      // Execute tool via real MCP server instance (with audit logging, in-memory credential decryption, read-only boundary)
+      const execution = await executeEndpointTool(endpoint, toolName, args || {}, {
+        source: 'PLAYGROUND',
+      });
+
+      const response = NextResponse.json({
+        success: execution.success,
+        status: execution.status,
+        statusText: execution.statusText,
+        latencyMs: execution.latencyMs,
+        endpoint: {
+          id: endpoint.id,
+          name: endpoint.name,
+        },
+        toolName,
+        sentBody: args || {},
+        response: execution.response,
+        error: execution.error,
+      });
+
+      applyRateLimitHeaders(response, limitResult);
+      return response;
+    }
+
+    // =========================================================================
+    // MODE A: Direct Integration Tool Execution
+    // =========================================================================
     if (!toolId) {
-      return NextResponse.json({ error: 'toolId wajib disertakan' }, { status: 400 });
+      return NextResponse.json({ error: 'toolId or (endpointId and toolName) is required' }, { status: 400 });
     }
 
     // 1. Ambil data tool beserta config integrasinya, pastikan milik user yang aktif
@@ -61,8 +130,8 @@ export async function POST(req: NextRequest) {
       where: {
         id: toolId,
         integration: {
-          user_id: user.id // <-- Keamanan tambahan: Isolasi kepemilikan multi-tenant
-        }
+          user_id: user.id, // Multi-tenant isolation
+        },
       },
       include: {
         integration: true,
@@ -83,32 +152,36 @@ export async function POST(req: NextRequest) {
 
     // 2. Siapkan Headers
     const headers: Record<string, string> = {
-      'Accept': 'application/json, text/plain, */*',
+      Accept: 'application/json, text/plain, */*',
     };
 
     // Dekripsi credential server-side
     let authConfig: any = {};
     if (integration.encrypted_auth_config && integration.auth_config_iv && integration.auth_config_tag) {
       try {
-        authConfig = decryptAuthConfig(
-          integration.encrypted_auth_config,
-          integration.auth_config_iv,
-          integration.auth_config_tag
-        ) || {};
+        authConfig =
+          decryptAuthConfig(
+            integration.encrypted_auth_config,
+            integration.auth_config_iv,
+            integration.auth_config_tag
+          ) || {};
       } catch (err) {
-        return NextResponse.json({
-          success: false,
-          status: 500,
-          statusText: 'Internal Gateway Error',
-          latencyMs: Math.round(performance.now() - startTime),
-          error: 'Unable to process integration credentials',
-        }, { status: 500 });
+        return NextResponse.json(
+          {
+            success: false,
+            status: 500,
+            statusText: 'Internal Gateway Error',
+            latencyMs: Math.round(performance.now() - startTime),
+            error: 'Unable to process integration credentials',
+          },
+          { status: 500 }
+        );
       }
     } else if (integration.auth_config) {
-      // Legacy fallback
-      authConfig = typeof integration.auth_config === 'string'
-        ? JSON.parse(integration.auth_config)
-        : (integration.auth_config || {});
+      authConfig =
+        typeof integration.auth_config === 'string'
+          ? JSON.parse(integration.auth_config)
+          : integration.auth_config || {};
     }
 
     const authType = integration.auth_type || 'none';
@@ -152,7 +225,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // 3. Sisipkan Path Params (misal: /pet/{petId} -> /pet/123)
+    // 3. Sisipkan Path Params
     const passedArgs = { ...(args || {}) };
     const pathMatches = targetUrl.match(/\{([^}]+)\}/g) || [];
 
@@ -190,13 +263,16 @@ export async function POST(req: NextRequest) {
         reason: 'SSRF blocked disallowed URL',
         metadata: { path: tool.path },
       });
-      return NextResponse.json({
-        success: false,
-        status: 403,
-        statusText: 'Forbidden',
-        latencyMs: Math.round(performance.now() - startTime),
-        error: 'URL destination is not allowed',
-      }, { status: 403 });
+      return NextResponse.json(
+        {
+          success: false,
+          status: 403,
+          statusText: 'Forbidden',
+          latencyMs: Math.round(performance.now() - startTime),
+          error: 'URL destination is not allowed',
+        },
+        { status: 403 }
+      );
     }
 
     // 5. Eksekusi Request ke API Asli (with SSRF-safe fetch)
@@ -218,13 +294,16 @@ export async function POST(req: NextRequest) {
           metadata: { path: tool.path },
         });
       }
-      return NextResponse.json({
-        success: false,
-        status: 403,
-        statusText: 'Forbidden',
-        latencyMs: Math.round(performance.now() - startTime),
-        error: isSsrf ? 'URL destination is not allowed' : 'Request to target URL failed',
-      }, { status: 403 });
+      return NextResponse.json(
+        {
+          success: false,
+          status: 403,
+          statusText: 'Forbidden',
+          latencyMs: Math.round(performance.now() - startTime),
+          error: isSsrf ? 'URL destination is not allowed' : 'Request to target URL failed',
+        },
+        { status: 403 }
+      );
     }
 
     const endTime = performance.now();
@@ -288,7 +367,6 @@ export async function POST(req: NextRequest) {
 
     applyRateLimitHeaders(response, limitResult);
     return response;
-
   } catch (error: any) {
     const endTime = performance.now();
     const latencyMs = Math.round(endTime - startTime);

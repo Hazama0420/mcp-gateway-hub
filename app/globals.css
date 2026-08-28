@@ -4,6 +4,58 @@
 
 @layer base {
   :root {
+    /* LIGHT MODE (FLAGSHIP): Crisp White + Pop-Tech Accent Palette */
+    --color-bg: #ffffff;
+    --color-bg-subtle: #f8fafc;
+    --color-surface: #ffffff;
+    --color-surface-elevated: #f1f5f9;
+    --color-surface-hover: #e2e8f0;
+    --color-border: #0f172a;
+    --color-border-subtle: #cbd5e1;
+
+    --color-text-primary: #0f172a;
+    --color-text-secondary: #475569;
+    --color-text-muted: #64748b;
+
+    /* Pop-Tech Controlled Color Palette */
+    --color-pop-lavender: #ede9fe;
+    --color-pop-lavender-border: #8b5cf6;
+    --color-pop-sky: #e0f2fe;
+    --color-pop-sky-border: #0284c7;
+    --color-pop-mint: #dcfce7;
+    --color-pop-mint-border: #10b981;
+    --color-pop-yellow: #fef08a;
+    --color-pop-yellow-border: #eab308;
+    --color-pop-coral: #ffedd5;
+    --color-pop-coral-border: #f97316;
+    --color-pop-pink: #fce7f3;
+    --color-pop-pink-border: #ec4899;
+
+    --color-accent: #0f172a;
+    --color-accent-highlight: #fef08a;
+    --color-accent-text: #ffffff;
+
+    --shadow-offset: 4px 4px 0px 0px #0f172a;
+    --shadow-offset-sm: 2px 2px 0px 0px #0f172a;
+    --shadow-offset-lg: 6px 6px 0px 0px #0f172a;
+    --shadow-offset-hover: 6px 6px 0px 0px #0f172a;
+
+    /* Refined Polkadot Token (Light Mode: Crisp Black Dots) */
+    --dot-color: rgba(15, 23, 42, 0.15);
+
+    /* Code & Syntax Highlighting Tokens (Light Mode) */
+    --code-bg: #f8fafc;
+    --code-border: #0f172a;
+    --code-header-bg: #f1f5f9;
+    --code-text: #0f172a;
+    --code-key: #4338ca;
+    --code-string: #047857;
+    --code-number: #c2410c;
+    --code-boolean: #1d4ed8;
+    --code-null: #be123c;
+    --code-punct: #334155;
+
+    /* Tailwind / Shadcn UI Compatibility */
     --background: 0 0% 100%;
     --foreground: 222.2 84% 4.9%;
     --card: 0 0% 100%;
@@ -20,18 +72,70 @@
     --accent-foreground: 222.2 47.4% 11.2%;
     --destructive: 0 84.2% 60.2%;
     --destructive-foreground: 210 40% 98%;
-    --border: 214.3 31.8% 91.4%;
-    --input: 214.3 31.8% 91.4%;
+    --border: 222.2 84% 4.9%;
+    --input: 222.2 84% 4.9%;
     --ring: 222.2 84% 4.9%;
-    --radius: 0.5rem;
+    --radius: 0.75rem;
   }
 
   .dark {
-    --background: 222.2 84% 4.9%;
+    /* DARK MODE: Near-black + High-Contrast Pop Accents */
+    --color-bg: #0b0f17;
+    --color-bg-subtle: #111724;
+    --color-surface: #141c2b;
+    --color-surface-elevated: #1b2438;
+    --color-surface-hover: #232f48;
+    --color-border: #334155;
+    --color-border-subtle: #1e293b;
+
+    --color-text-primary: #f8fafc;
+    --color-text-secondary: #94a3b8;
+    --color-text-muted: #64748b;
+
+    /* Pop Colors in Dark Mode */
+    --color-pop-lavender: #2e1065;
+    --color-pop-lavender-border: #a78bfa;
+    --color-pop-sky: #0c4a6e;
+    --color-pop-sky-border: #38bdf8;
+    --color-pop-mint: #064e3b;
+    --color-pop-mint-border: #34d399;
+    --color-pop-yellow: #422006;
+    --color-pop-yellow-border: #facc15;
+    --color-pop-coral: #431407;
+    --color-pop-coral-border: #fb923c;
+    --color-pop-pink: #500724;
+    --color-pop-pink-border: #f472b6;
+
+    --color-accent: #f8fafc;
+    --color-accent-highlight: #facc15;
+    --color-accent-text: #0f172a;
+
+    --shadow-offset: 4px 4px 0px 0px #000000;
+    --shadow-offset-sm: 2px 2px 0px 0px #000000;
+    --shadow-offset-lg: 6px 6px 0px 0px #000000;
+    --shadow-offset-hover: 6px 6px 0px 0px #000000;
+
+    /* Refined Polkadot Token (Dark Mode: Muted Dots) */
+    --dot-color: rgba(255, 255, 255, 0.08);
+
+    /* Code & Syntax Highlighting Tokens (Dark Mode) */
+    --code-bg: #0b0f17;
+    --code-border: #334155;
+    --code-header-bg: #141c2b;
+    --code-text: #f8fafc;
+    --code-key: #a78bfa;
+    --code-string: #34d399;
+    --code-number: #fbbf24;
+    --code-boolean: #60a5fa;
+    --code-null: #f43f5e;
+    --code-punct: #94a3b8;
+
+    /* Tailwind / Shadcn UI Compatibility */
+    --background: 224 40% 6%;
     --foreground: 210 40% 98%;
-    --card: 222.2 84% 4.9%;
+    --card: 220 35% 10%;
     --card-foreground: 210 40% 98%;
-    --popover: 222.2 84% 4.9%;
+    --popover: 220 35% 10%;
     --popover-foreground: 210 40% 98%;
     --primary: 210 40% 98%;
     --primary-foreground: 222.2 47.4% 11.2%;
@@ -43,18 +147,148 @@
     --accent-foreground: 210 40% 98%;
     --destructive: 0 62.8% 30.6%;
     --destructive-foreground: 210 40% 98%;
-    --border: 217.2 32.6% 17.5%;
-    --input: 217.2 32.6% 17.5%;
+    --border: 217.2 32.6% 25%;
+    --input: 217.2 32.6% 25%;
     --ring: 212.7 26.8% 83.9%;
   }
 }
 
 @layer base {
   * {
-    border-color: hsl(var(--border));
+    border-color: var(--color-border);
   }
   body {
-    background-color: hsl(var(--background));
-    color: hsl(var(--foreground));
+    background-color: var(--color-bg);
+    color: var(--color-text-primary);
+  }
+}
+
+/* =========================================================================
+   ANIME POP-TECH UTILITIES & GRAPHIC DESIGN LANGUAGE
+   ========================================================================= */
+
+/* Flagship Polkadot Pattern Background (Refined 25-40% size increase) */
+.bg-polkadot {
+  background-color: var(--color-bg);
+  background-image: radial-gradient(var(--dot-color) 1.65px, transparent 1.65px);
+  background-size: 24px 24px;
+}
+
+/* Pop Card with Manga-inspired Offset Shadow */
+.pop-card {
+  background-color: var(--color-surface);
+  border: 2px solid var(--color-border);
+  box-shadow: var(--shadow-offset);
+  border-radius: 1rem;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+}
+
+.pop-card-hover:hover {
+  transform: translate(-2px, -2px);
+  box-shadow: var(--shadow-offset-hover);
+}
+
+/* Pop Interactive Button */
+.pop-btn {
+  border: 2px solid var(--color-border);
+  box-shadow: var(--shadow-offset-sm);
+  font-weight: 700;
+  border-radius: 0.75rem;
+  transition: transform 0.1s ease, box-shadow 0.1s ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.pop-btn:hover {
+  transform: translate(-1.5px, -1.5px);
+  box-shadow: var(--shadow-offset);
+}
+
+.pop-btn:active {
+  transform: translate(1.5px, 1.5px);
+  box-shadow: 0px 0px 0px 0px var(--color-border);
+}
+
+/* Pop Input Field */
+.pop-input {
+  border: 2px solid var(--color-border);
+  background-color: var(--color-surface);
+  color: var(--color-text-primary);
+  box-shadow: var(--shadow-offset-sm);
+  border-radius: 0.75rem;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.pop-input:focus {
+  outline: none;
+  border-color: var(--color-border);
+  box-shadow: var(--shadow-offset);
+}
+
+/* Color Variant Cards */
+.pop-card-lavender {
+  background-color: var(--color-pop-lavender);
+  border-color: var(--color-border);
+}
+
+.pop-card-sky {
+  background-color: var(--color-pop-sky);
+  border-color: var(--color-border);
+}
+
+.pop-card-mint {
+  background-color: var(--color-pop-mint);
+  border-color: var(--color-border);
+}
+
+.pop-card-yellow {
+  background-color: var(--color-pop-yellow);
+  border-color: var(--color-border);
+}
+
+.pop-card-coral {
+  background-color: var(--color-pop-coral);
+  border-color: var(--color-border);
+}
+
+.pop-card-pink {
+  background-color: var(--color-pop-pink);
+  border-color: var(--color-border);
+}
+
+/* Badge System */
+.pop-badge {
+  display: inline-flex;
+  align-items: center;
+  font-weight: 700;
+  font-size: 0.6875rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 0.2rem 0.55rem;
+  border-radius: 9999px;
+  border: 1.5px solid var(--color-border);
+  box-shadow: 1px 1px 0px 0px var(--color-border);
+}
+
+/* Graphic starburst and markers */
+.star-accent {
+  display: inline-block;
+  font-weight: bold;
+  transform: rotate(0deg);
+  transition: transform 0.2s ease;
+}
+
+.group:hover .star-accent {
+  transform: rotate(45deg) scale(1.15);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pop-card-hover:hover,
+  .pop-btn:hover,
+  .pop-btn:active,
+  .star-accent,
+  .group:hover .star-accent {
+    transform: none !important;
   }
 }

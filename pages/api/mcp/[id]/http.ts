@@ -23,7 +23,9 @@ type SessionEntry = {
 
 const sessions = new Map<string, SessionEntry>();
 
-async function createMcpServer(endpoint: any) {
+export async function createMcpServer(endpoint: any, options?: { source?: 'MCP' | 'PLAYGROUND' }) {
+  const source = options?.source || 'MCP';
+
   const server = new McpServer({
     name: 'MCP Gateway Hub',
     version: '1.0.0',
@@ -53,7 +55,7 @@ async function createMcpServer(endpoint: any) {
             endpointId: endpoint.id,
             userId: endpoint.user_id,
             toolName: name,
-            source: 'MCP',
+            source,
             status: isError ? 'FAILED' : 'SUCCESS',
             errorCategory: isError ? 'EXTERNAL_API' : null,
             executionTimeMs,
@@ -71,7 +73,7 @@ async function createMcpServer(endpoint: any) {
             endpointId: endpoint.id,
             userId: endpoint.user_id,
             toolName: name,
-            source: 'MCP',
+            source,
             status: 'FAILED',
             errorCategory: 'INTERNAL',
             executionTimeMs,
@@ -86,25 +88,28 @@ async function createMcpServer(endpoint: any) {
     return (originalTool as any)(name, ...rest);
   }) as any;
 
-  for (const service of endpoint.services) {
-    try {
-      const decryptedJson = decrypt(service.encrypted_config, service.iv, service.tag);
-      const config = JSON.parse(decryptedJson);
+  if (Array.isArray(endpoint.services)) {
+    for (const service of endpoint.services) {
+      try {
+        const decryptedJson = decrypt(service.encrypted_config, service.iv, service.tag);
+        const config = JSON.parse(decryptedJson);
 
-      switch (service.service_type) {
-        case 'github':
-          registerGithub(server, { token: config.token });
-          break;
-        case 'supabase':
-        case 'postgres':
-          registerPostgres(server, { connectionString: config.connectionString });
-          break;
-        case 'vercel':
-          registerVercel(server, { token: config.token, teamId: config.teamId });
-          break;
+        switch (service.service_type) {
+          case 'github':
+            registerGithub(server, { token: config.token });
+            break;
+          case 'supabase':
+          case 'postgres':
+          case 'postgresql':
+            registerPostgres(server, { connectionString: config.connectionString });
+            break;
+          case 'vercel':
+            registerVercel(server, { token: config.token, teamId: config.teamId });
+            break;
+        }
+      } catch (error) {
+        console.error('[HTTP] Error registering service:', service.service_type, error);
       }
-    } catch (error) {
-      console.error('[HTTP] Error registering service:', service.service_type, error);
     }
   }
 

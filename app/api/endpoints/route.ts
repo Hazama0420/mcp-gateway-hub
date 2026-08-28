@@ -113,6 +113,58 @@ export async function POST(req: Request) {
   }
 }
 
+export async function PATCH(req: Request) {
+  try {
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.email) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { email: session.user.email }
+    });
+
+    if (!user) return NextResponse.json({ error: 'User not found' }, { status: 404 });
+
+    const body = await req.json();
+    const { id, name, is_active } = body;
+
+    if (!id) return NextResponse.json({ error: 'ID is required' }, { status: 400 });
+
+    const existing = await prisma.mcpEndpoint.findFirst({
+      where: {
+        id,
+        user_id: user.id
+      }
+    });
+
+    if (!existing) {
+      return NextResponse.json({ error: 'Endpoint not found or unauthorized' }, { status: 404 });
+    }
+
+    const updated = await prisma.mcpEndpoint.update({
+      where: { id },
+      data: {
+        ...(name !== undefined ? { name } : {}),
+        ...(is_active !== undefined ? { is_active: Boolean(is_active) } : {}),
+      },
+      select: {
+        id: true,
+        user_id: true,
+        name: true,
+        is_active: true,
+        created_at: true,
+        services: true,
+      }
+    });
+
+    return NextResponse.json(updated);
+  } catch (error) {
+    console.error('Update endpoint error:', error);
+    return NextResponse.json({ error: 'Failed to update endpoint' }, { status: 500 });
+  }
+}
+
 export async function DELETE(req: Request) {
   try {
     const session = await getServerSession(authOptions);
