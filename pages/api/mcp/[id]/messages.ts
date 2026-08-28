@@ -1,11 +1,12 @@
-// pages/api/mcp/[id]/messages.ts
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { transports } from '@/lib/transportStore';
+import { checkRateLimit, applyRateLimitHeaders, LIMITS } from '@/lib/security/ratelimit';
+import { getMcpCorsHeaders, applyCorsHeaders } from '@/lib/security/cors';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Accept, Mcp-Session-Id');
+  const origin = req.headers.origin as string | undefined;
+  const corsHeaders = getMcpCorsHeaders(origin);
+  applyCorsHeaders(res, corsHeaders);
 
   if (req.method === 'OPTIONS') {
     return res.status(204).end();
@@ -15,20 +16,30 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const { sessionId } = req.query;
+  const { id, sessionId } = req.query;
 
   if (Array.isArray(sessionId) || !sessionId) {
     return res.status(400).json({ error: 'Missing sessionId' });
   }
 
-  const transport = transports.get(sessionId);
+  // Session-based limit
+  const reqLimitIdentifier = `mcp_req:${id}`;
+  const reqLimitResult = await checkRateLimit(reqLimitIdentifier, LIMITS.MCP_REQUEST);
 
-  if (!transport) {
-    return res.status(404).json({ error: 'Session not found' });
+  if (!reqLimitResult.success) {
+    applyRateLimitHeaders(res, reqLimitResult);
+    return res.status(429).json({ error: 'Too many requests' });
+  }
+  applyRateLimitHeaders(res, reqLimitResult);
+
+  const transport = transports.get(sessionId as string);
+
+  if (!transport || transport.endpointId !== id) {
+    return res.status(404).json({ error: 'Session not found or belongs to another endpoint' });
   }
 
   try {
-    await transport.handlePostMessage(req, res, req.body);
+    await transport.transport.handlePostMessage(req, res, req.body);
   } catch (error: any) {
     console.error('[Messages] Error:', error);
     if (!res.headersSent) {

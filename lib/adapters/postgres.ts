@@ -3,6 +3,9 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { Pool, PoolConfig } from 'pg';
 
+const QUERY_TIMEOUT_MS = 30_000;
+const MAX_ROWS = 150;
+
 interface PostgresCredentials {
   connectionString: string;
 }
@@ -26,14 +29,13 @@ function getPool(connectionString: string): Pool {
       connectionTimeoutMillis: 10_000,
     };
 
-    // Tambahkan SSL bypass untuk database cloud modern
     if (isCloudPostgres) {
       config.ssl = { rejectUnauthorized: false };
     }
 
     pool = new Pool(config);
     pool.on('error', (err) => {
-      console.error('[postgres adapter] pool error, membuang dari cache:', err.message);
+      console.error('[postgres adapter] pool error:', err.message);
       poolCache.delete(connectionString);
     });
     poolCache.set(connectionString, pool);
@@ -41,31 +43,67 @@ function getPool(connectionString: string): Pool {
   return pool;
 }
 
+function sanitizeDbError(error: any): string {
+  const msg = error?.message || 'Unknown database error';
+  const sanitized = msg
+    .replace(/postgresql:\/\/[^\s]+/gi, '[REDACTED_CONNECTION_STRING]')
+    .replace(/password=[^\s&]+/gi, 'password=[REDACTED]')
+    .replace(/host=[^\s&]+/gi, 'host=[REDACTED]');
+  return sanitized;
+}
+
 export function registerTools(server: McpServer, credentials: PostgresCredentials) {
   const pool = getPool(credentials.connectionString);
 
-  // 1. Tool: run_sql_query
   server.tool(
     'run_sql_query',
-    'Execute a SQL query on the PostgreSQL database (supports SELECT, INSERT, UPDATE, DELETE, etc.)',
+    'Execute a READ-ONLY SQL query on the PostgreSQL database. Only SELECT and read operations are allowed. Write operations (INSERT, UPDATE, DELETE, DROP, etc.) will be rejected by the database.',
     {
-      sql: z.string().describe('SQL query to execute'),
+      sql: z.string().describe('SQL query to execute (read-only)'),
       params: z.array(z.any()).optional().describe('Optional array of parameters for parameterized queries'),
     },
     async ({ sql, params }) => {
       const client = await pool.connect();
       try {
-        const result = await client.query(sql, params || []);
+        await client.query(`SET statement_timeout = ${QUERY_TIMEOUT_MS}`);
+        await client.query('BEGIN READ ONLY');
+
+        let result;
+        try {
+          result = await client.query(sql, params || []);
+        } catch (queryError: any) {
+          await client.query('ROLLBACK').catch(() => {});
+
+          if (queryError.code === '25006') {
+            return {
+              content: [{ type: 'text' as const, text: 'Query rejected: read-only mode. Write operations (INSERT, UPDATE, DELETE, DROP, etc.) are not allowed.' }],
+              isError: true,
+            };
+          }
+
+          if (queryError.code === '57014') {
+            return {
+              content: [{ type: 'text' as const, text: `Query cancelled: exceeded timeout of ${QUERY_TIMEOUT_MS / 1000} seconds.` }],
+              isError: true,
+            };
+          }
+
+          return {
+            content: [{ type: 'text' as const, text: `Database Error: ${sanitizeDbError(queryError)}` }],
+            isError: true,
+          };
+        }
+
+        await client.query('COMMIT');
 
         if (result.rows) {
-          const MAX_ROWS = 150;
           const isTruncated = result.rows.length > MAX_ROWS;
           const rowsToReturn = isTruncated ? result.rows.slice(0, MAX_ROWS) : result.rows;
 
           return {
             content: [
               {
-                type: 'text',
+                type: 'text' as const,
                 text: JSON.stringify(
                   {
                     command: result.command,
@@ -88,23 +126,24 @@ export function registerTools(server: McpServer, credentials: PostgresCredential
         return {
           content: [
             {
-              type: 'text',
+              type: 'text' as const,
               text: `Query executed: ${result.command}, rows affected: ${result.rowCount}`,
             },
           ],
         };
       } catch (error: any) {
+        await client.query('ROLLBACK').catch(() => {});
         return {
-          content: [{ type: 'text', text: `Database Error: ${error.message}` }],
+          content: [{ type: 'text' as const, text: `Database Error: ${sanitizeDbError(error)}` }],
           isError: true,
         };
       } finally {
+        await client.query('RESET statement_timeout').catch(() => {});
         client.release();
       }
     }
   );
 
-  // 2. Tool: list_tables
   server.tool(
     'list_tables',
     'List all tables and views in the PostgreSQL database',
@@ -114,6 +153,7 @@ export function registerTools(server: McpServer, credentials: PostgresCredential
     async ({ schema }) => {
       const client = await pool.connect();
       try {
+        await client.query(`SET statement_timeout = ${QUERY_TIMEOUT_MS}`);
         const query = `
           SELECT table_name, table_type, table_schema
           FROM information_schema.tables
@@ -128,20 +168,20 @@ export function registerTools(server: McpServer, credentials: PostgresCredential
         }));
 
         return {
-          content: [{ type: 'text', text: JSON.stringify(tables, null, 2) }],
+          content: [{ type: 'text' as const, text: JSON.stringify(tables, null, 2) }],
         };
       } catch (error: any) {
         return {
-          content: [{ type: 'text', text: `Database Error: ${error.message}` }],
+          content: [{ type: 'text' as const, text: `Database Error: ${sanitizeDbError(error)}` }],
           isError: true,
         };
       } finally {
+        await client.query('RESET statement_timeout').catch(() => {});
         client.release();
       }
     }
   );
 
-  // 3. Tool: describe_table (Struktur Kolom & Tipe Data)
   server.tool(
     'describe_table',
     'Get detailed column definitions, data types, primary keys, and nullability for a specific table',
@@ -152,6 +192,7 @@ export function registerTools(server: McpServer, credentials: PostgresCredential
     async ({ table_name, schema }) => {
       const client = await pool.connect();
       try {
+        await client.query(`SET statement_timeout = ${QUERY_TIMEOUT_MS}`);
         const query = `
           SELECT 
             c.column_name,
@@ -177,13 +218,16 @@ export function registerTools(server: McpServer, credentials: PostgresCredential
         const result = await client.query(query, [schema || 'public', table_name]);
 
         if (result.rows.length === 0) {
-          throw new Error(`Table '${table_name}' tidak ditemukan pada schema '${schema || 'public'}'.`);
+          return {
+            content: [{ type: 'text' as const, text: `Table '${table_name}' not found in schema '${schema || 'public'}'.` }],
+            isError: true,
+          };
         }
 
         return {
           content: [
             {
-              type: 'text',
+              type: 'text' as const,
               text: JSON.stringify(
                 {
                   table: table_name,
@@ -198,10 +242,11 @@ export function registerTools(server: McpServer, credentials: PostgresCredential
         };
       } catch (error: any) {
         return {
-          content: [{ type: 'text', text: `Database Error: ${error.message}` }],
+          content: [{ type: 'text' as const, text: `Database Error: ${sanitizeDbError(error)}` }],
           isError: true,
         };
       } finally {
+        await client.query('RESET statement_timeout').catch(() => {});
         client.release();
       }
     }

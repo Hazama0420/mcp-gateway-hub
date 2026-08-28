@@ -4,6 +4,8 @@ import prisma from '@/lib/prisma';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/app/api/auth/[...nextauth]/route';
 import { encrypt } from '@/lib/crypto';
+import * as crypto from 'crypto';
+import bcrypt from 'bcryptjs';
 
 export async function GET(req: Request) {
   try {
@@ -27,7 +29,12 @@ export async function GET(req: Request) {
       where: {
         user_id: user.id
       },
-      include: {
+      select: {
+        id: true,
+        user_id: true,
+        name: true,
+        is_active: true,
+        created_at: true,
         services: true,
       },
       orderBy: { created_at: 'desc' }
@@ -58,6 +65,11 @@ export async function POST(req: Request) {
     const body = await req.json();
     const { name, services } = body;
 
+    // Generate a secure API key
+    const rawApiKey = `mcp_${crypto.randomBytes(32).toString('hex')}`;
+    const salt = await bcrypt.genSalt(10);
+    const apiKeyHash = await bcrypt.hash(rawApiKey, salt);
+
     // Lakukan enkripsi otomatis di backend untuk setiap service agar iv & tag tidak kosong
     const servicesWithEncryption = (services || []).map((service: any) => {
       // Ubah config objek menjadi string JSON
@@ -78,14 +90,23 @@ export async function POST(req: Request) {
       data: {
         name,
         user_id: user.id,
+        api_key_hash: apiKeyHash,
         services: {
           create: servicesWithEncryption,
         },
       },
-      include: { services: true },
+      select: {
+        id: true,
+        user_id: true,
+        name: true,
+        is_active: true,
+        created_at: true,
+        services: true,
+      },
     });
 
-    return NextResponse.json(endpoint, { status: 201 });
+    // Return the plaintext key ONLY ONCE during creation
+    return NextResponse.json({ ...endpoint, apiKey: rawApiKey }, { status: 201 });
   } catch (error) {
     console.error('Create endpoint error:', error);
     return NextResponse.json({ error: 'Failed to create endpoint' }, { status: 500 });

@@ -1,5 +1,8 @@
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
+import { getServerSession } from 'next-auth';
+import { authOptions } from '@/app/api/auth/[...nextauth]/route';
+import { encryptAuthConfig, decryptAuthConfig, sanitizeIntegration } from '@/lib/crypto';
 
 function normalizeSlug(value: string) {
   return value
@@ -20,10 +23,24 @@ export async function GET(
   context: RouteContext
 ) {
   try {
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.email) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { email: session.user.email }
+    });
+
+    if (!user) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
     const integration =
       await prisma.integration.findUnique({
         where: {
           id: context.params.id,
+          user_id: user.id
         },
         include: {
           tools: {
@@ -45,7 +62,7 @@ export async function GET(
       );
     }
 
-    return NextResponse.json(integration);
+    return NextResponse.json(sanitizeIntegration(integration));
   } catch (error) {
     console.error(
       '[GET /api/integrations/:id] Error:',
@@ -68,12 +85,26 @@ export async function PUT(
   context: RouteContext
 ) {
   try {
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.email) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { email: session.user.email }
+    });
+
+    if (!user) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
     const body = await request.json();
 
     const existing =
       await prisma.integration.findUnique({
         where: {
           id: context.params.id,
+          user_id: user.id
         },
       });
 
@@ -113,6 +144,7 @@ export async function PUT(
       await prisma.integration.findFirst({
         where: {
           slug: finalSlug,
+          user_id: user.id,
           NOT: {
             id: context.params.id,
           },
@@ -131,10 +163,64 @@ export async function PUT(
       );
     }
 
+    // Handle credential encryption & updates
+    let updatedEncryptedData: string | null | undefined = undefined;
+    let updatedIv: string | null | undefined = undefined;
+    let updatedTag: string | null | undefined = undefined;
+
+    const targetAuthType = auth_type !== undefined ? String(auth_type) : existing.auth_type;
+
+    if (targetAuthType === 'none') {
+      updatedEncryptedData = null;
+      updatedIv = null;
+      updatedTag = null;
+    } else if (auth_config !== undefined) {
+      const authConfigObj = typeof auth_config === 'string' ? JSON.parse(auth_config) : (auth_config || {});
+      const hasNewSecret = Boolean(
+        (authConfigObj.credential && String(authConfigObj.credential).trim()) ||
+        (authConfigObj.key && String(authConfigObj.key).trim()) ||
+        (authConfigObj.token && String(authConfigObj.token).trim()) ||
+        (authConfigObj.password && String(authConfigObj.password).trim())
+      );
+
+      if (hasNewSecret) {
+        // User supplied a new credential
+        const encrypted = encryptAuthConfig(authConfigObj);
+        updatedEncryptedData = encrypted?.encryptedData ?? null;
+        updatedIv = encrypted?.iv ?? null;
+        updatedTag = encrypted?.tag ?? null;
+      } else {
+        // User kept credential blank; preserve existing credential and merge new metadata if any
+        if (existing.encrypted_auth_config && existing.auth_config_iv && existing.auth_config_tag) {
+          try {
+            const oldConfig = decryptAuthConfig(
+              existing.encrypted_auth_config,
+              existing.auth_config_iv,
+              existing.auth_config_tag
+            ) || {};
+            const merged = { ...oldConfig, ...authConfigObj };
+            delete merged.credential; // ensure no empty string overwrites old credential
+            if (oldConfig.credential) merged.credential = oldConfig.credential;
+            if (oldConfig.key) merged.key = oldConfig.key;
+            if (oldConfig.token) merged.token = oldConfig.token;
+            if (oldConfig.password) merged.password = oldConfig.password;
+
+            const encrypted = encryptAuthConfig(merged);
+            updatedEncryptedData = encrypted?.encryptedData ?? null;
+            updatedIv = encrypted?.iv ?? null;
+            updatedTag = encrypted?.tag ?? null;
+          } catch {
+            // Keep existing fields unchanged if decryption fails
+          }
+        }
+      }
+    }
+
     const integration =
       await prisma.integration.update({
         where: {
           id: context.params.id,
+          user_id: user.id
         },
         data: {
           ...(name !== undefined && {
@@ -176,8 +262,12 @@ export async function PUT(
               String(auth_type),
           }),
 
-          ...(auth_config !== undefined && {
-            auth_config,
+          auth_config: null, // JANGAN simpan plaintext
+
+          ...(updatedEncryptedData !== undefined && {
+            encrypted_auth_config: updatedEncryptedData,
+            auth_config_iv: updatedIv,
+            auth_config_tag: updatedTag,
           }),
 
           ...(typeof is_active ===
@@ -190,7 +280,7 @@ export async function PUT(
         },
       });
 
-    return NextResponse.json(integration);
+    return NextResponse.json(sanitizeIntegration(integration));
   } catch (error: any) {
     console.error(
       '[PUT /api/integrations/:id] Error:',
@@ -214,10 +304,24 @@ export async function DELETE(
   context: RouteContext
 ) {
   try {
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.email) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { email: session.user.email }
+    });
+
+    if (!user) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
     const existing =
       await prisma.integration.findUnique({
         where: {
           id: context.params.id,
+          user_id: user.id
         },
       });
 
@@ -235,6 +339,7 @@ export async function DELETE(
     await prisma.integration.delete({
       where: {
         id: context.params.id,
+        user_id: user.id
       },
     });
 

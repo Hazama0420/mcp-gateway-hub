@@ -1,6 +1,10 @@
 // app/api/integrations/import-openapi/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import YAML from 'yaml';
+import { getServerSession } from 'next-auth';
+import { authOptions } from '@/app/api/auth/[...nextauth]/route';
+import { safeFetch, validateBaseUrl, MAX_RESPONSE_BYTES } from '@/lib/security/url';
+import { checkRateLimit, applyRateLimitHeaders, LIMITS } from '@/lib/security/ratelimit';
 
 export const dynamic = 'force-dynamic';
 
@@ -191,6 +195,30 @@ function parseOpenApiSchema(spec: any) {
 
 export async function POST(req: NextRequest) {
   try {
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.email) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { email: session.user.email }
+    });
+
+    if (!user) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    // Rate Limit OpenAPI Import
+    const ip = req.ip || req.headers.get('x-forwarded-for') || 'unknown';
+    const limitIdentifier = `openapi_import:${user.id}:${ip}`;
+    const limitResult = await checkRateLimit(limitIdentifier, LIMITS.OPENAPI_IMPORT);
+
+    if (!limitResult.success) {
+      const response = NextResponse.json({ error: 'Too many requests' }, { status: 429 });
+      applyRateLimitHeaders(response, limitResult);
+      return response;
+    }
+
     const body = await req.json();
     const { url, rawSpec } = body;
 
@@ -199,24 +227,48 @@ export async function POST(req: NextRequest) {
     if (url && typeof url === 'string') {
       const cleanUrl = normalizeUrl(url);
 
-      const fetchRes = await fetch(cleanUrl, {
-        headers: {
-          'User-Agent':
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 MCP-Gateway-Hub/1.0',
-          Accept: 'application/json, application/yaml, text/yaml, text/plain, */*',
-        },
-      });
+      let fetchRes: Response;
+      try {
+        fetchRes = await safeFetch(cleanUrl, {
+          headers: {
+            'User-Agent': 'MCP-Gateway-Hub/1.0',
+            Accept: 'application/json, application/yaml, text/yaml, text/plain, */*',
+          },
+        });
+      } catch (err: any) {
+        return NextResponse.json(
+          { error: err.message === 'URL destination is not allowed'
+              ? 'URL destination is not allowed'
+              : 'Failed to fetch the provided URL' },
+          { status: 400 }
+        );
+      }
 
       if (!fetchRes.ok) {
         return NextResponse.json(
           {
-            error: `Gagal mengambil URL (${fetchRes.status} ${fetchRes.statusText}). Pastikan URL publik dan mengarah ke file JSON/YAML spesifikasi.`,
+            error: `Failed to fetch URL (${fetchRes.status}). Ensure the URL is public and points to a JSON/YAML spec file.`,
           },
           { status: 400 }
         );
       }
 
+      const contentLength = parseInt(fetchRes.headers.get('content-length') || '0', 10);
+      if (contentLength > MAX_RESPONSE_BYTES) {
+        return NextResponse.json(
+          { error: 'Response too large' },
+          { status: 400 }
+        );
+      }
+
       const text = await fetchRes.text();
+      if (text.length > MAX_RESPONSE_BYTES) {
+        return NextResponse.json(
+          { error: 'Response too large' },
+          { status: 400 }
+        );
+      }
+
       specData = parseRawContent(text);
     } else if (rawSpec) {
       specData =
@@ -232,7 +284,17 @@ export async function POST(req: NextRequest) {
     }
 
     const parsed = parseOpenApiSchema(specData);
-    return NextResponse.json(parsed);
+
+    if (parsed.baseUrl) {
+      const baseUrlCheck = validateBaseUrl(parsed.baseUrl);
+      if (!baseUrlCheck.safe) {
+        parsed.baseUrl = '';
+      }
+    }
+
+    const response = NextResponse.json(parsed);
+    applyRateLimitHeaders(response, limitResult);
+    return response;
   } catch (error: any) {
     return NextResponse.json(
       { error: `Gagal memproses OpenAPI: ${error.message}` },

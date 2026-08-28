@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/app/api/auth/[...nextauth]/route';
+import { encryptAuthConfig, sanitizeIntegration } from '@/lib/crypto';
 
 function createSlug(value: string) {
   return value
@@ -44,7 +45,7 @@ export async function GET() {
       },
     });
 
-    return NextResponse.json(integrations);
+    return NextResponse.json(integrations.map(sanitizeIntegration));
   } catch (error) {
     console.error('[GET /api/integrations] Error:', error);
     return NextResponse.json(
@@ -122,17 +123,35 @@ export async function POST(request: Request) {
       );
     }
 
+    // Enkripsi auth_config jika ada
+    let encryptedAuthConfig: { encryptedData: string; iv: string; tag: string } | null = null;
+    const finalAuthType = auth_type ? String(auth_type) : 'none';
+
+    if (finalAuthType !== 'none' && auth_config) {
+      try {
+        encryptedAuthConfig = encryptAuthConfig(auth_config);
+      } catch (err: any) {
+        return NextResponse.json(
+          { error: 'Failed to securely encrypt integration credentials' },
+          { status: 500 }
+        );
+      }
+    }
+
     const integration = await prisma.integration.create({
       data: {
-        user_id: user.id, // <-- Kaitkan langsung dengan user yang aktif
+        user_id: user.id,
         name: String(name).trim(),
         slug: finalSlug,
         description: description ? String(description).trim() : null,
         icon: icon ? String(icon).trim() : null,
         category: category ? String(category).trim() : null,
         base_url: String(base_url).trim().replace(/\/+$/, ''),
-        auth_type: auth_type ? String(auth_type) : 'none',
-        auth_config: auth_config ?? null,
+        auth_type: finalAuthType,
+        auth_config: null, // JANGAN simpan plaintext
+        encrypted_auth_config: encryptedAuthConfig?.encryptedData ?? null,
+        auth_config_iv: encryptedAuthConfig?.iv ?? null,
+        auth_config_tag: encryptedAuthConfig?.tag ?? null,
         is_active: typeof is_active === 'boolean' ? is_active : true,
         tools:
           Array.isArray(tools) && tools.length > 0
@@ -158,7 +177,7 @@ export async function POST(request: Request) {
       },
     });
 
-    return NextResponse.json(integration, { status: 201 });
+    return NextResponse.json(sanitizeIntegration(integration), { status: 201 });
   } catch (error: any) {
     console.error('[POST /api/integrations] Error:', error);
     return NextResponse.json(

@@ -23,6 +23,7 @@ model User {
   integrations Integration[]
   accounts     Account[]
   sessions     Session[]
+  logs         ExecutionLog[]
 }
 
 // ============================================
@@ -33,6 +34,7 @@ model McpEndpoint {
   user_id    String
   name       String
   is_active  Boolean  @default(true)
+  api_key_hash String?
   created_at DateTime @default(now())
 
   user         User                  @relation(fields: [user_id], references: [id], onDelete: Cascade)
@@ -59,20 +61,31 @@ model EndpointService {
 }
 
 // ============================================
-// EXECUTION LOG
+// EXECUTION LOG & AUDIT TRAIL
 // ============================================
 model ExecutionLog {
-  id                String   @id @default(uuid())
-  endpoint_id       String
+  id                String       @id @default(uuid())
+  execution_id      String       @default(uuid())
+  endpoint_id       String?
+  user_id           String?
   tool_name         String
-  status            String
-  execution_time_ms Int
-  created_at        DateTime @default(now())
+  source            String       @default("MCP") // MCP, PLAYGROUND, CONTROL_PLANE, SECURITY
+  status            String       // SUCCESS, FAILED, BLOCKED, TIMEOUT, RATE_LIMITED, AUTH_FAILED
+  error_category    String?      // VALIDATION, AUTHENTICATION, AUTHORIZATION, RATE_LIMIT, SSRF, DATABASE, EXTERNAL_API, TIMEOUT, INTERNAL
+  execution_time_ms Int          @default(0)
+  result_size       Int?
+  metadata          Json?        // Safe metadata only (NO secrets)
+  created_at        DateTime     @default(now())
 
-  endpoint McpEndpoint @relation(fields: [endpoint_id], references: [id], onDelete: Cascade)
+  endpoint McpEndpoint? @relation(fields: [endpoint_id], references: [id], onDelete: Cascade)
+  user     User?        @relation(fields: [user_id], references: [id], onDelete: Cascade)
 
   @@index([endpoint_id])
+  @@index([user_id])
   @@index([created_at])
+  @@index([status])
+  @@index([tool_name])
+  @@index([execution_id])
 }
 
 // ============================================
@@ -88,9 +101,12 @@ model Integration {
   icon        String?
   category    String?
   base_url    String
-  auth_type   String   @default("none")
-  auth_config Json?
-  is_active   Boolean  @default(true)
+  auth_type             String   @default("none")
+  auth_config           Json?
+  encrypted_auth_config String?
+  auth_config_iv        String?
+  auth_config_tag       String?
+  is_active             Boolean  @default(true)
   created_at  DateTime @default(now())
   updated_at  DateTime @updatedAt
 

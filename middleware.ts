@@ -1,30 +1,60 @@
-// middleware.ts
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 import { getToken } from 'next-auth/jwt';
+import {
+  isOriginAllowed,
+  getBrowserCorsHeaders,
+  getMcpCorsHeaders,
+  applyCorsHeaders,
+} from '@/lib/security/cors';
 
 export async function middleware(request: NextRequest) {
   const path = request.nextUrl.pathname;
-  const response = NextResponse.next();
+  const origin = request.headers.get('origin');
+  const isMcpRoute = path.startsWith('/api/mcp/');
 
-  // 1. Tambahkan Header CORS untuk semua rute /api
-  if (path.startsWith('/api')) {
-    response.headers.set('Access-Control-Allow-Origin', '*');
-    response.headers.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-    response.headers.set('Access-Control-Allow-Headers', 'Content-Type, Accept, Authorization, MCP-Protocol-Version, Last-Event-ID, api_key, mcp-session-id');
-    response.headers.set('Access-Control-Expose-Headers', 'Mcp-Session-Id, WWW-Authenticate');
+  // 1. Tangani preflight OPTIONS
+  if (request.method === 'OPTIONS') {
+    if (isMcpRoute) {
+      const mcpHeaders = getMcpCorsHeaders(origin);
+      return new NextResponse(null, { status: 204, headers: mcpHeaders });
+    }
+
+    if (path.startsWith('/api/')) {
+      if (origin && isOriginAllowed(origin)) {
+        const browserHeaders = getBrowserCorsHeaders(origin);
+        return new NextResponse(null, { status: 204, headers: browserHeaders });
+      }
+      // Origin tidak diizinkan atau tidak ada: return 204 tanpa CORS headers
+      return new NextResponse(null, { status: 204 });
+    }
+
+    return NextResponse.next();
   }
 
-  // 2. Izinkan preflight OPTIONS agar lolos tanpa cek login
-  if (request.method === 'OPTIONS') {
+  // 2. Siapkan response
+  const response = NextResponse.next();
+
+  // Tambahkan CORS headers yang sesuai
+  if (isMcpRoute) {
+    if (origin) {
+      applyCorsHeaders(response, getMcpCorsHeaders(origin));
+    }
+    // Bebaskan seluruh rute MCP dari cek login dashboard
     return response;
   }
 
-  // 3. Bebaskan rute publik (auth, login, dan SELURUH rute MCP)
+  if (path.startsWith('/api/')) {
+    if (origin && isOriginAllowed(origin)) {
+      applyCorsHeaders(response, getBrowserCorsHeaders(origin));
+    }
+  }
+
+  // 3. Bebaskan rute publik (auth, login, health)
   if (
     path.startsWith('/api/auth') || 
-    path.startsWith('/login') || 
-    path.startsWith('/api/mcp/')
+    path.startsWith('/login') ||
+    path.startsWith('/api/health')
   ) {
     return response;
   }
