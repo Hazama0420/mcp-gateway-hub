@@ -6,6 +6,7 @@ import prisma from '@/lib/prisma';
 import { redirectUriMatches, createAuthorizationCode } from '@/lib/oauth/store';
 import { checkRateLimit, applyRateLimitHeaders, LIMITS } from '@/lib/security/ratelimit';
 import { recordSecurityEvent } from '@/lib/security/audit';
+import { extractEndpointIdFromResource } from '@/lib/oauth/config';
 
 export const dynamic = 'force-dynamic';
 
@@ -70,17 +71,64 @@ export async function GET(req: Request) {
     );
   }
 
-  // Find target endpoint from resource URL or parameter
-  let targetEndpoint: any = null;
-  let targetEndpointId: string | undefined = endpointIdParam || undefined;
+  // Resolve target endpoint with authoritative priority:
+  // 1. Explicit endpoint_id parameter
+  let targetEndpointId: string | undefined = endpointIdParam && endpointIdParam.trim() ? endpointIdParam.trim() : undefined;
 
+  // 2. Endpoint extracted from canonical resource URL
   if (!targetEndpointId && resource) {
-    const match = resource.match(/\/api\/mcp\/([a-zA-Z0-9_-]+)/);
-    if (match && match[1]) {
-      targetEndpointId = match[1];
+    const extracted = extractEndpointIdFromResource(resource);
+    if (extracted) {
+      targetEndpointId = extracted;
     }
   }
 
+  // 3. Authoritative client.endpoint_id binding
+  if (!targetEndpointId && client.endpoint_id) {
+    targetEndpointId = client.endpoint_id;
+  }
+
+  // Security Check: If client is bound to an endpoint, any requested targetEndpointId MUST match client.endpoint_id
+  if (client.endpoint_id && targetEndpointId && client.endpoint_id !== targetEndpointId) {
+    recordSecurityEvent({
+      eventType: 'AUTH_FAILED',
+      route: '/api/oauth/authorize',
+      reason: 'OAuth client endpoint mismatch during GET authorize',
+      metadata: {
+        client_id: client.client_id,
+        client_endpoint_id: client.endpoint_id,
+        target_endpoint_id: targetEndpointId,
+      },
+    });
+    return NextResponse.json(
+      {
+        error: 'invalid_request',
+        error_description: 'OAuth client is not authorized for the requested endpoint',
+      },
+      { status: 400 }
+    );
+  }
+
+  // 4. Single active endpoint fallback (if authenticated session exists)
+  const session = await getServerSession(authOptions);
+  let user: any = null;
+  if (session?.user?.email) {
+    user = await prisma.user.findUnique({
+      where: { email: session.user.email },
+    });
+  }
+
+  if (!targetEndpointId && user) {
+    const userEndpoints = await prisma.mcpEndpoint.findMany({
+      where: { user_id: user.id, is_active: true },
+      select: { id: true },
+    });
+    if (userEndpoints.length === 1) {
+      targetEndpointId = userEndpoints[0].id;
+    }
+  }
+
+  let targetEndpoint: any = null;
   if (targetEndpointId) {
     targetEndpoint = await prisma.mcpEndpoint.findUnique({
       where: { id: targetEndpointId },
@@ -263,17 +311,46 @@ export async function POST(req: Request) {
     return NextResponse.json({ redirect_url: redirectUrl });
   }
 
-  // 6. Resolve MCP Endpoint
-  let targetEndpointId: string | undefined = endpointIdParam;
+  // 6. Resolve MCP Endpoint with strict authoritative priority:
+  // Priority 1: Explicit endpoint_id parameter
+  let targetEndpointId: string | undefined = endpointIdParam && typeof endpointIdParam === 'string' && endpointIdParam.trim() ? endpointIdParam.trim() : undefined;
+
+  // Priority 2: Endpoint extracted from canonical resource URL
   if (!targetEndpointId && resource) {
-    const match = resource.match(/\/api\/mcp\/([a-zA-Z0-9_-]+)/);
-    if (match && match[1]) {
-      targetEndpointId = match[1];
+    const extracted = extractEndpointIdFromResource(resource);
+    if (extracted) {
+      targetEndpointId = extracted;
     }
   }
 
+  // Priority 3: Authoritative client.endpoint_id binding
+  if (!targetEndpointId && client.endpoint_id) {
+    targetEndpointId = client.endpoint_id;
+  }
+
+  // Security Check: If client is bound to an endpoint, any targetEndpointId MUST match client.endpoint_id
+  if (client.endpoint_id && targetEndpointId && client.endpoint_id !== targetEndpointId) {
+    recordSecurityEvent({
+      eventType: 'AUTH_FAILED',
+      route: '/api/oauth/authorize',
+      userId: user.id,
+      reason: 'OAuth client endpoint mismatch during POST authorize',
+      metadata: {
+        client_id: client.client_id,
+        client_endpoint_id: client.endpoint_id,
+        target_endpoint_id: targetEndpointId,
+      },
+    });
+    const redirectUrl = createRedirectUrl(finalRedirectUri, {
+      error: 'invalid_request',
+      error_description: 'OAuth client is not authorized for the requested endpoint',
+      state,
+    });
+    return NextResponse.json({ redirect_url: redirectUrl });
+  }
+
+  // Priority 4: Single active endpoint fallback
   if (!targetEndpointId) {
-    // If user has only 1 endpoint, default to it; otherwise require selection
     const userEndpoints = await prisma.mcpEndpoint.findMany({
       where: { user_id: user.id, is_active: true },
       select: { id: true },
@@ -282,6 +359,14 @@ export async function POST(req: Request) {
     if (userEndpoints.length === 1) {
       targetEndpointId = userEndpoints[0].id;
     } else {
+      // Priority 5: Ambiguous / multiple endpoints without binding -> return invalid_target
+      recordSecurityEvent({
+        eventType: 'AUTH_FAILED',
+        route: '/api/oauth/authorize',
+        userId: user.id,
+        reason: 'Target MCP endpoint could not be determined or user has multiple endpoints',
+        metadata: { client_id: clientId },
+      });
       const redirectUrl = createRedirectUrl(finalRedirectUri, {
         error: 'invalid_target',
         error_description: 'Target MCP endpoint could not be determined or user has multiple endpoints',

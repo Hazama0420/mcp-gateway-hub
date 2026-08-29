@@ -100,6 +100,37 @@ export function getCanonicalResourceUrl(endpointId: string, reqOrigin?: string |
 }
 
 /**
+ * Safely extracts the canonical endpoint ID from an RFC 8707 resource indicator URL or path.
+ * Accepts canonical forms:
+ * - https://<domain>/api/mcp/<endpoint-id>/http
+ * - https://<domain>/api/mcp/<endpoint-id>
+ * - /api/mcp/<endpoint-id>/http
+ * - /api/mcp/<endpoint-id>
+ * Validates endpoint ID format ([a-zA-Z0-9_-]{1,64}) to prevent path traversal and injection.
+ */
+export function extractEndpointIdFromResource(resource: string | null | undefined): string | null {
+  if (!resource || typeof resource !== 'string') return null;
+  const trimmed = resource.trim();
+  if (!trimmed) return null;
+
+  try {
+    let path = trimmed;
+    if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+      const parsed = new URL(trimmed);
+      path = parsed.pathname;
+    }
+
+    const match = path.match(/^\/?api\/mcp\/([a-zA-Z0-9_-]{1,64})(?:\/.*)?$/);
+    if (match && match[1]) {
+      return match[1];
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+/**
  * Constructs the RFC 9728 OAuth 2.0 Protected Resource Metadata URL for an endpoint or root.
  * RFC 9728 path-specific: /.well-known/oauth-protected-resource/api/mcp/<endpoint-id>/http
  */
