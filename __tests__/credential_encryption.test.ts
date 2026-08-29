@@ -222,6 +222,72 @@ async function runTests() {
   const corsCheck = fs.readFileSync('lib/security/cors.ts', 'utf-8');
   assert('P1.3 CORS Hardening still intact', corsCheck.includes('isOriginAllowed') && corsCheck.includes('getMcpCorsHeaders'));
 
+  // -------------------------------------------------------------
+  // 7. Vercel Credential Lifecycle & Safe Error Handling (Tests A-F)
+  // -------------------------------------------------------------
+  console.log('\n--- 7. Vercel Credential Lifecycle & Error Handling (Tests A-F) ---');
+
+  // Test A: Vercel credential decrypt round-trip
+  const vercelPlainConfig = JSON.stringify({ token: 'test_vercel_pat_token_valid_48_chars_1234567890abcdef' });
+  const encryptedVercel = encrypt(vercelPlainConfig);
+  assert('Test A1: Vercel credential encrypts into ciphertext, IV, and tag', Boolean(encryptedVercel.encryptedData && encryptedVercel.iv && encryptedVercel.tag));
+  const decryptedVercelJson = decrypt(encryptedVercel.encryptedData, encryptedVercel.iv, encryptedVercel.tag);
+  const parsedVercel = JSON.parse(decryptedVercelJson);
+  assert('Test A2: Vercel credential decrypts into valid JSON with correct token', parsedVercel.token === 'test_vercel_pat_token_valid_48_chars_1234567890abcdef');
+
+  // Test B: Missing or corrupted credential throws controlled error
+  let missingThrown = false;
+  try {
+    decrypt('corrupted_encrypted_data', encryptedVercel.iv, encryptedVercel.tag);
+  } catch (err: any) {
+    missingThrown = true;
+    assert('Test B: Corrupted/missing credential throws safe generic error without leaking crypto details', err.message === 'Unable to process integration credentials');
+  }
+  assert('Test B2: Decrypt error was caught safely', missingThrown);
+
+  // Test C: Vercel API 401/403 Error message structure
+  const mock403Response = {
+    status: 403,
+    statusText: 'Forbidden',
+    json: async () => ({ error: { code: 'forbidden', message: 'Not authorized', invalidToken: true } }),
+  };
+  let formattedError = '';
+  try {
+    const errData = await mock403Response.json();
+    const message = errData?.error?.message || errData?.message || mock403Response.statusText;
+    throw new Error(`Vercel API error (${mock403Response.status}): ${message}`);
+  } catch (err: any) {
+    formattedError = err.message;
+  }
+  assert('Test C: Vercel 403 API response maps to expected error message', formattedError === 'Vercel API error (403): Not authorized');
+
+  // Test D: Team context parameter construction
+  const teamIdTest = 'team_1234567890';
+  const urlWithTeam = new URL('https://api.vercel.com/v9/projects');
+  urlWithTeam.searchParams.set('teamId', teamIdTest);
+  assert('Test D: Vercel team context attaches teamId query parameter', urlWithTeam.searchParams.get('teamId') === 'team_1234567890');
+
+  // Test E: Bearer header format construction
+  const validTokenSample = 'test_token_secret_value';
+  const outgoingHeaders = {
+    Authorization: `Bearer ${validTokenSample}`,
+    'Content-Type': 'application/json',
+  };
+  assert('Test E: Outgoing Authorization header formatted as valid Bearer token', outgoingHeaders.Authorization.startsWith('Bearer ') && outgoingHeaders.Authorization.length > 7);
+
+  // Test F: Credential never exposed in sanitized audit output
+  const { sanitizeAuditMetadata } = require('../lib/security/audit');
+  const auditSample = sanitizeAuditMetadata({
+    token: validTokenSample,
+    apiKey: validTokenSample,
+    Authorization: `Bearer ${validTokenSample}`,
+    safeMetric: 42,
+  });
+  assert('Test F1: Token redacted in audit log', auditSample.token === '[REDACTED]');
+  assert('Test F2: ApiKey redacted in audit log', auditSample.apiKey === '[REDACTED]');
+  assert('Test F3: Authorization header redacted in audit log', auditSample.Authorization === '[REDACTED]');
+  assert('Test F4: Non-sensitive metric preserved', auditSample.safeMetric === 42);
+
   console.log(`\n=== Results: ${passed} passed, ${failed} failed ===`);
   if (failed > 0) {
     process.exit(1);

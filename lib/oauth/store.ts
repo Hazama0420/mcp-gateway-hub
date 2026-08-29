@@ -391,6 +391,63 @@ export async function revokeEndpointOAuthClient(clientId: string, endpointId: st
 }
 
 /**
+ * Permanently deletes a revoked/inactive OAuth client for an endpoint.
+ * Enforces ownership and revoked-only state precondition in a database transaction.
+ */
+export async function deleteEndpointOAuthClient(clientId: string, endpointId: string, userId: string) {
+  const prisma = getPrismaClient();
+
+  // 1. Verify endpoint ownership
+  const endpoint = await prisma.mcpEndpoint.findFirst({
+    where: { id: endpointId, user_id: userId },
+  });
+
+  if (!endpoint) {
+    throw new Error('Endpoint not found or unauthorized');
+  }
+
+  // 2. Verify client existence and relationship to endpoint/user
+  const client = await prisma.oAuthClient.findFirst({
+    where: {
+      client_id: clientId,
+      OR: [
+        { endpoint_id: endpointId, user_id: userId },
+        { endpoint_id: endpointId },
+      ],
+    },
+  });
+
+  if (!client) {
+    throw new Error('OAuth client not found or unauthorized');
+  }
+
+  // 3. Precondition: Client MUST be revoked/inactive before permanent deletion
+  if (client.is_active) {
+    throw new Error('OAuth client must be revoked before deletion.');
+  }
+
+  // 4. Atomic database transaction: clean up tokens, codes, and client record
+  await prisma.$transaction(async (tx: any) => {
+    // Invalidate/delete any remaining refresh tokens
+    await tx.oAuthRefreshToken.deleteMany({
+      where: { client_id: clientId },
+    });
+
+    // Invalidate/delete any authorization codes
+    await tx.oAuthAuthorizationCode.deleteMany({
+      where: { client_id: clientId },
+    });
+
+    // Delete the client record
+    await tx.oAuthClient.delete({
+      where: { id: client.id },
+    });
+  });
+
+  return { success: true, client_id: clientId, deleted: true };
+}
+
+/**
  * Creates and stores a single-use authorization code bound to PKCE S256 challenge.
  */
 export async function createAuthorizationCode(params: {

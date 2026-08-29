@@ -7,8 +7,8 @@ export interface RateLimitConfig {
 
 // Global default limits if not specified via ENV
 export const LIMITS = {
-  MCP_AUTH: { limit: 10, windowMs: 60 * 1000 }, // 10 attempts per minute per IP
-  MCP_REQUEST: { limit: 100, windowMs: 60 * 1000 }, // 100 requests per minute per endpoint
+  MCP_AUTH: { limit: 20, windowMs: 60 * 1000 }, // 20 attempts per minute per IP for unauthenticated probes
+  MCP_REQUEST: { limit: 120, windowMs: 60 * 1000 }, // 120 requests per minute per endpoint for authenticated MCP traffic
   PLAYGROUND: { limit: 30, windowMs: 60 * 1000 }, // 30 executions per minute per user/IP
   OPENAPI_IMPORT: { limit: 5, windowMs: 60 * 1000 }, // 5 imports per minute per user/IP
   OAUTH_AUTH: { limit: 30, windowMs: 60 * 1000 }, // 30 authorization requests per minute per IP

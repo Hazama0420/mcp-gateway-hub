@@ -35,10 +35,20 @@
   "include": [
     "next-env.d.ts",
     ".next/types/**/*.ts",
-    "**/*.ts",
-    "**/*.tsx"
+    "app/**/*.ts",
+    "app/**/*.tsx",
+    "components/**/*.ts",
+    "components/**/*.tsx",
+    "lib/**/*.ts",
+    "lib/**/*.tsx",
+    "pages/**/*.ts",
+    "pages/**/*.tsx",
+    "scripts/**/*.ts",
+    "__tests__/**/*.ts",
+    "middleware.ts"
   ],
   "exclude": [
-    "node_modules"
+    "node_modules",
+    "Gsuiteto9router"
   ]
 }

@@ -75,6 +75,30 @@ async function runTests() {
   const r8 = await checkRateLimit(id3, limitQuick);
   assert('Request allowed after window reset', r8.success === true);
 
+  // Test 5 (Test G): Rapid MCP Protocol Traffic (MCP_REQUEST accommodates rapid burst)
+  const endpointMcpId = 'mcp_req_test_burst_' + Date.now();
+  let allBurstAllowed = true;
+  for (let i = 0; i < 25; i++) {
+    const burstReq = await checkRateLimit(endpointMcpId, LIMITS.MCP_REQUEST);
+    if (!burstReq.success) {
+      allBurstAllowed = false;
+      break;
+    }
+  }
+  assert('Test G: Rapid MCP protocol handshake & tool calls burst allowed (25 rapid requests within MCP_REQUEST limit)', allBurstAllowed);
+
+  // Test 6 (Test H): Excessive unauthenticated probes get throttled
+  const probeId = 'mcp_auth_probe_burst_' + Date.now();
+  let throttledAfterLimit = false;
+  for (let i = 0; i < LIMITS.MCP_AUTH.limit + 5; i++) {
+    const probeReq = await checkRateLimit(probeId, LIMITS.MCP_AUTH);
+    if (!probeReq.success) {
+      throttledAfterLimit = true;
+      break;
+    }
+  }
+  assert('Test H: Excessive unauthenticated probes are throttled with 429 when exceeding MCP_AUTH', throttledAfterLimit);
+
   console.log(`\n=== Results: ${passed} passed, ${failed} failed ===`);
   if (failed > 0) process.exit(1);
 }

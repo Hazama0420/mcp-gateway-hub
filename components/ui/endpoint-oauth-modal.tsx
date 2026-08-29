@@ -21,6 +21,7 @@ import {
   Eye,
   EyeOff,
   ShieldCheck,
+  ShieldAlert,
   Plus,
   Trash2,
   ExternalLink,
@@ -87,6 +88,12 @@ export function EndpointOAuthModal({
   const [revoking, setRevoking] = React.useState(false);
   const [revokeError, setRevokeError] = React.useState<string | null>(null);
   const [revokeSuccess, setRevokeSuccess] = React.useState<string | null>(null);
+
+  // Delete confirmation dialog & state
+  const [deleteTarget, setDeleteTarget] = React.useState<OAuthClientRecord | null>(null);
+  const [deleting, setDeleting] = React.useState(false);
+  const [deleteError, setDeleteError] = React.useState<string | null>(null);
+  const [deleteSuccess, setDeleteSuccess] = React.useState<string | null>(null);
 
   // Diagnostics test
   const [testResult, setTestResult] = React.useState<any | null>(null);
@@ -176,7 +183,7 @@ export function EndpointOAuthModal({
 
     try {
       const res = await fetch(`/api/endpoints/${endpoint.id}/oauth-clients/${revokeTarget.client_id}`, {
-        method: 'DELETE',
+        method: 'PATCH',
       });
 
       const data = await res.json();
@@ -193,6 +200,34 @@ export function EndpointOAuthModal({
       setRevokeError(err.message || 'Failed to revoke client');
     } finally {
       setRevoking(false);
+    }
+  };
+
+  const handleDeleteClient = async () => {
+    if (!endpoint || !deleteTarget) return;
+
+    setDeleteError(null);
+    setDeleting(true);
+
+    try {
+      const res = await fetch(`/api/endpoints/${endpoint.id}/oauth-clients/${deleteTarget.client_id}`, {
+        method: 'DELETE',
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.message || data.error || 'Failed to delete OAuth client');
+      }
+
+      const deletedName = deleteTarget.client_name || 'Client';
+      setDeleteTarget(null);
+      setDeleteSuccess(`OAuth client "${deletedName}" deleted permanently.`);
+      setTimeout(() => setDeleteSuccess(null), 4000);
+      fetchClients();
+    } catch (err: any) {
+      setDeleteError(err.message || 'Failed to delete client');
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -588,7 +623,7 @@ export function EndpointOAuthModal({
                 </div>
               )}
 
-              {/* Revoke Feedback Alerts */}
+              {/* Revoke/Delete Feedback Alerts */}
               {revokeSuccess && (
                 <div className="bg-emerald-100 dark:bg-emerald-950/60 border-2 border-emerald-500 text-emerald-800 dark:text-emerald-200 text-xs px-3 py-2 rounded-xl font-bold flex items-center gap-2">
                   <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
@@ -596,10 +631,24 @@ export function EndpointOAuthModal({
                 </div>
               )}
 
+              {deleteSuccess && (
+                <div className="bg-emerald-100 dark:bg-emerald-950/60 border-2 border-emerald-500 text-emerald-800 dark:text-emerald-200 text-xs px-3 py-2 rounded-xl font-bold flex items-center gap-2">
+                  <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
+                  <span>{deleteSuccess}</span>
+                </div>
+              )}
+
               {revokeError && (
                 <div className="bg-rose-100 dark:bg-rose-950/60 border-2 border-rose-500 text-rose-700 dark:text-rose-200 text-xs px-3 py-2 rounded-xl font-bold flex items-center gap-2">
                   <AlertCircle className="h-4 w-4 text-rose-600 shrink-0" />
                   <span>{revokeError}</span>
+                </div>
+              )}
+
+              {deleteError && (
+                <div className="bg-rose-100 dark:bg-rose-950/60 border-2 border-rose-500 text-rose-700 dark:text-rose-200 text-xs px-3 py-2 rounded-xl font-bold flex items-center gap-2">
+                  <AlertCircle className="h-4 w-4 text-rose-600 shrink-0" />
+                  <span>{deleteError}</span>
                 </div>
               )}
 
@@ -629,21 +678,37 @@ export function EndpointOAuthModal({
                           </span>
                         </div>
 
-                        {c.is_active && (
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant="outline"
-                            onClick={() => {
-                              setRevokeError(null);
-                              setRevokeTarget(c);
-                            }}
-                            className="pop-btn text-rose-600 hover:text-rose-700 text-[11px] h-7 px-2 border border-rose-300 gap-1 cursor-pointer"
-                          >
-                            <Trash2 className="h-3 w-3" />
-                            <span>Revoke</span>
-                          </Button>
-                        )}
+                        <div className="flex items-center gap-1.5">
+                          {c.is_active ? (
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              onClick={() => {
+                                setRevokeError(null);
+                                setRevokeTarget(c);
+                              }}
+                              className="pop-btn text-amber-600 hover:text-amber-700 text-[11px] h-7 px-2 border border-amber-300 gap-1 cursor-pointer"
+                            >
+                              <ShieldAlert className="h-3 w-3" />
+                              <span>Revoke</span>
+                            </Button>
+                          ) : (
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              onClick={() => {
+                                setDeleteError(null);
+                                setDeleteTarget(c);
+                              }}
+                              className="pop-btn text-rose-600 hover:text-rose-700 text-[11px] h-7 px-2 border border-rose-300 gap-1 cursor-pointer"
+                            >
+                              <Trash2 className="h-3 w-3" />
+                              <span>Delete</span>
+                            </Button>
+                          )}
+                        </div>
                       </div>
 
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px] text-[var(--color-text-secondary)]">
@@ -737,8 +802,8 @@ export function EndpointOAuthModal({
       <Dialog open={revokeTarget !== null} onOpenChange={(openNext) => !openNext && !revoking && setRevokeTarget(null)}>
         <DialogContent className="sm:max-w-[440px] bg-[var(--color-surface)] border-2 border-[var(--color-border)] shadow-[6px_6px_0px_0px_rgba(15,23,42,1)] rounded-2xl text-[var(--color-text-primary)]">
           <DialogHeader className="space-y-2">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-rose-100 dark:bg-rose-950/60 border-2 border-rose-500 text-rose-600 shadow-[2px_2px_0px_0px_rgba(15,23,42,1)]">
-              <Trash2 className="h-5 w-5 stroke-[2.5]" />
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-100 dark:bg-amber-950/60 border-2 border-amber-500 text-amber-600 shadow-[2px_2px_0px_0px_rgba(15,23,42,1)]">
+              <ShieldAlert className="h-5 w-5 stroke-[2.5]" />
             </div>
             <DialogTitle className="text-base font-black font-mono tracking-tight">
               Revoke OAuth Client?
@@ -772,7 +837,7 @@ export function EndpointOAuthModal({
               type="button"
               disabled={revoking}
               onClick={handleRevokeClient}
-              className="pop-btn bg-rose-500 hover:bg-rose-600 text-white font-black text-xs px-4 py-2 shadow-[2px_2px_0px_0px_rgba(15,23,42,1)] gap-1.5"
+              className="pop-btn bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs px-4 py-2 shadow-[2px_2px_0px_0px_rgba(15,23,42,1)] gap-1.5"
             >
               {revoking ? (
                 <>
@@ -781,8 +846,67 @@ export function EndpointOAuthModal({
                 </>
               ) : (
                 <>
-                  <Trash2 className="h-3.5 w-3.5 stroke-[2.5]" />
+                  <ShieldAlert className="h-3.5 w-3.5 stroke-[2.5]" />
                   <span>Revoke Client</span>
+                </>
+              )}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Confirmation Dialog */}
+      <Dialog open={deleteTarget !== null} onOpenChange={(openNext) => !openNext && !deleting && setDeleteTarget(null)}>
+        <DialogContent className="sm:max-w-[440px] bg-[var(--color-surface)] border-2 border-[var(--color-border)] shadow-[6px_6px_0px_0px_rgba(15,23,42,1)] rounded-2xl text-[var(--color-text-primary)]">
+          <DialogHeader className="space-y-2">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-rose-100 dark:bg-rose-950/60 border-2 border-rose-500 text-rose-600 shadow-[2px_2px_0px_0px_rgba(15,23,42,1)]">
+              <Trash2 className="h-5 w-5 stroke-[2.5]" />
+            </div>
+            <DialogTitle className="text-base font-black font-mono tracking-tight">
+              Delete OAuth Client?
+            </DialogTitle>
+            <DialogDescription className="text-xs font-medium text-[var(--color-text-secondary)] leading-relaxed">
+              This permanently deletes the OAuth client <strong>{deleteTarget?.client_name}</strong> and its associated authorization/token records.
+              <br /><br />
+              <span className="font-bold text-rose-600">This action cannot be undone.</span>
+            </DialogDescription>
+          </DialogHeader>
+
+          {deleteError && (
+            <div className="bg-rose-100 dark:bg-rose-950/60 border-2 border-rose-500 text-rose-700 dark:text-rose-200 text-xs px-3 py-2 rounded-xl font-bold flex items-center gap-2">
+              <AlertCircle className="h-4 w-4 shrink-0 text-rose-600" />
+              <span>{deleteError}</span>
+            </div>
+          )}
+
+          <div className="flex justify-end gap-2 pt-3 border-t border-[var(--color-border)]">
+            <Button
+              type="button"
+              variant="outline"
+              disabled={deleting}
+              onClick={() => {
+                setDeleteTarget(null);
+                setDeleteError(null);
+              }}
+              className="pop-btn text-xs font-bold"
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              disabled={deleting}
+              onClick={handleDeleteClient}
+              className="pop-btn bg-rose-600 hover:bg-rose-700 text-white font-black text-xs px-4 py-2 shadow-[2px_2px_0px_0px_rgba(15,23,42,1)] gap-1.5"
+            >
+              {deleting ? (
+                <>
+                  <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                  <span>Deleting...</span>
+                </>
+              ) : (
+                <>
+                  <Trash2 className="h-3.5 w-3.5 stroke-[2.5]" />
+                  <span>Delete permanently</span>
                 </>
               )}
             </Button>
