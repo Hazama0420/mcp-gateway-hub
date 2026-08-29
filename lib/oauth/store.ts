@@ -448,6 +448,218 @@ export async function deleteEndpointOAuthClient(clientId: string, endpointId: st
 }
 
 /**
+ * Creates an OAuth client bound to a specific Combo.
+ * Automatically resolves and persists canonical managed redirect URIs.
+ */
+export async function createComboOAuthClient(params: {
+  comboId: string;
+  userId: string;
+  clientName: string;
+  clientType?: 'confidential' | 'public';
+  redirectUris?: string[];
+  scope?: string;
+}) {
+  const prisma = getPrismaClient();
+
+  const combo = await prisma.combo.findFirst({
+    where: { id: params.comboId, user_id: params.userId },
+  });
+
+  if (!combo) {
+    throw new Error('Combo not found or unauthorized');
+  }
+
+  const configHelper = getConfigHelper();
+  const managedUris: string[] = configHelper?.getManagedEndpointRedirectUris
+    ? configHelper.getManagedEndpointRedirectUris()
+    : [
+        'https://oauth-redirect.googleusercontent.com/r/user_bound_custom-mcp-102731520205207880268-mcp-gateway-hub-beta_vercel_app',
+        'https://antigravity.google/oauth-callback',
+        'https://vertexaisearch.cloud.google.com/oauth-redirect',
+        'https://gemini.google.com/oauth/callback',
+        'https://developers.google.com/oauth/callback',
+        'http://127.0.0.1:8080/callback',
+      ];
+
+  const canonicalUri: string = configHelper?.getCanonicalGeminiRedirectUri
+    ? configHelper.getCanonicalGeminiRedirectUri()
+    : 'https://oauth-redirect.googleusercontent.com/r/user_bound_custom-mcp-102731520205207880268-mcp-gateway-hub-beta_vercel_app';
+
+  let uris: string[];
+
+  if (params.redirectUris && params.redirectUris.length > 0) {
+    const rawUris = params.redirectUris
+      .map((u) => (typeof u === 'string' ? u.trim() : ''))
+      .filter(Boolean);
+
+    for (const uri of rawUris) {
+      if (!isValidRedirectUri(uri)) {
+        throw new Error(`Invalid redirect_uri: ${uri}`);
+      }
+    }
+
+    uris = Array.from(new Set([canonicalUri, ...rawUris]));
+  } else {
+    uris = managedUris;
+  }
+
+  const isPublic = params.clientType === 'public';
+  const clientId = `mcp_client_${crypto.randomUUID()}`;
+  let rawClientSecret: string | undefined;
+  let clientSecretHash: string | undefined;
+
+  if (!isPublic) {
+    rawClientSecret = `mcp_sec_${crypto.randomBytes(32).toString('hex')}`;
+    const salt = await bcrypt.genSalt(10);
+    clientSecretHash = await bcrypt.hash(rawClientSecret, salt);
+  }
+
+  const client = await prisma.oAuthClient.create({
+    data: {
+      client_id: clientId,
+      client_secret_hash: clientSecretHash || null,
+      client_name: params.clientName || 'Gemini Spark',
+      client_type: isPublic ? 'public' : 'confidential',
+      redirect_uris: uris,
+      grant_types: ['authorization_code', 'refresh_token'],
+      response_types: ['code'],
+      token_endpoint_auth_method: isPublic ? 'none' : 'client_secret_post',
+      scope: params.scope || 'mcp:read mcp:write',
+      combo_id: params.comboId,
+      user_id: params.userId,
+      is_active: true,
+    },
+  });
+
+  return {
+    client_id: client.client_id,
+    client_secret: rawClientSecret,
+    client_name: client.client_name,
+    client_type: client.client_type,
+    token_endpoint_auth_method: client.token_endpoint_auth_method,
+    redirect_uris: client.redirect_uris,
+    scope: client.scope,
+    created_at: client.created_at,
+    is_active: client.is_active,
+  };
+}
+
+/**
+ * Lists all OAuth clients configured for a specific Combo.
+ */
+export async function listComboOAuthClients(comboId: string, userId: string) {
+  const prisma = getPrismaClient();
+
+  const clients = await prisma.oAuthClient.findMany({
+    where: {
+      combo_id: comboId,
+      user_id: userId,
+    },
+    select: {
+      id: true,
+      client_id: true,
+      client_name: true,
+      client_type: true,
+      token_endpoint_auth_method: true,
+      redirect_uris: true,
+      scope: true,
+      is_active: true,
+      created_at: true,
+      updated_at: true,
+    },
+    orderBy: { created_at: 'desc' },
+  });
+
+  return clients;
+}
+
+/**
+ * Revokes an OAuth client for a Combo.
+ */
+export async function revokeComboOAuthClient(clientId: string, comboId: string, userId: string) {
+  const prisma = getPrismaClient();
+
+  const client = await prisma.oAuthClient.findFirst({
+    where: {
+      client_id: clientId,
+      OR: [
+        { combo_id: comboId, user_id: userId },
+        { combo_id: comboId },
+      ],
+    },
+  });
+
+  if (!client) {
+    throw new Error('OAuth client not found or unauthorized');
+  }
+
+  if (client.is_active) {
+    await prisma.oAuthClient.update({
+      where: { id: client.id },
+      data: { is_active: false },
+    });
+  }
+
+  // Revoke all active refresh tokens for this client
+  await prisma.oAuthRefreshToken.updateMany({
+    where: { client_id: clientId, revoked_at: null },
+    data: { revoked_at: new Date() },
+  });
+
+  return { success: true, client_id: clientId, is_active: false };
+}
+
+/**
+ * Permanently deletes a revoked/inactive OAuth client for a Combo.
+ */
+export async function deleteComboOAuthClient(clientId: string, comboId: string, userId: string) {
+  const prisma = getPrismaClient();
+
+  const combo = await prisma.combo.findFirst({
+    where: { id: comboId, user_id: userId },
+  });
+
+  if (!combo) {
+    throw new Error('Combo not found or unauthorized');
+  }
+
+  const client = await prisma.oAuthClient.findFirst({
+    where: {
+      client_id: clientId,
+      OR: [
+        { combo_id: comboId, user_id: userId },
+        { combo_id: comboId },
+      ],
+    },
+  });
+
+  if (!client) {
+    throw new Error('OAuth client not found or unauthorized');
+  }
+
+  if (client.is_active) {
+    throw new Error('OAuth client must be revoked before deletion.');
+  }
+
+  await prisma.$transaction(async (tx: any) => {
+    await tx.oAuthRefreshToken.deleteMany({
+      where: { client_id: clientId },
+    });
+
+    await tx.oAuthAuthorizationCode.deleteMany({
+      where: { client_id: clientId },
+    });
+
+    await tx.oAuthClient.delete({
+      where: { id: client.id },
+    });
+  });
+
+  return { success: true, client_id: clientId, deleted: true };
+}
+
+
+/**
  * Creates and stores a single-use authorization code bound to PKCE S256 challenge.
  */
 export async function createAuthorizationCode(params: {

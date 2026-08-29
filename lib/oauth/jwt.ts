@@ -59,6 +59,10 @@ function resolveIssuer(reqOrigin?: string | null): string {
 
 function resolveResourceUrl(endpointId: string, reqOrigin?: string | null): string {
   const issuer = resolveIssuer(reqOrigin);
+  if (endpointId.startsWith('combo_')) {
+    const rawId = endpointId.replace(/^combo_/, '');
+    return `${issuer}/api/mcp/combo/${rawId}/http`;
+  }
   return `${issuer}/api/mcp/${endpointId}/http`;
 }
 
@@ -89,14 +93,20 @@ export function base64UrlDecode(str: string): string {
  */
 export function signMcpAccessToken(params: {
   userId: string;
-  endpointId: string;
+  endpointId?: string;
+  comboId?: string;
   clientId: string;
   scope?: string;
   expiresInSeconds?: number;
   reqOrigin?: string | null;
 }): { token: string; expiresIn: number; payload: McpTokenPayload } {
   const issuer = resolveIssuer(params.reqOrigin);
-  const resourceUrl = resolveResourceUrl(params.endpointId, params.reqOrigin);
+  const isCombo = Boolean(params.comboId || (params.endpointId && params.endpointId.startsWith('combo_')));
+  const rawTargetId = params.comboId || (params.endpointId ? params.endpointId.replace(/^combo_/, '') : '');
+
+  const resourceUrl = isCombo
+    ? `${issuer}/api/mcp/combo/${rawTargetId}/http`
+    : `${issuer}/api/mcp/${rawTargetId}/http`;
 
   const expiresIn = params.expiresInSeconds !== undefined ? params.expiresInSeconds : 3600; // 1 hour default
   const now = Math.floor(Date.now() / 1000);
@@ -110,7 +120,7 @@ export function signMcpAccessToken(params: {
     iss: issuer,
     aud: resourceUrl,
     sub: params.userId,
-    endpoint_id: params.endpointId,
+    endpoint_id: isCombo ? `combo_${rawTargetId}` : rawTargetId,
     client_id: params.clientId,
     scope: params.scope || 'mcp:read mcp:write',
     iat: now,
@@ -159,13 +169,14 @@ export type TokenVerificationResult =
  * Strictly verifies an MCP OAuth access token JWT:
  * - Signature verification with constant-time equality
  * - Expiration and Not-Before check
- * - Resource/Audience binding (token's aud must match canonical resource URL or endpoint ID)
- * - Endpoint ID binding (token's endpoint_id must match target endpoint ID)
+ * - Resource/Audience binding (token's aud must match canonical resource URL or endpoint/combo ID)
+ * - Target ID binding
  */
 export function verifyMcpAccessToken(
   token: string,
-  endpointId: string,
-  reqOrigin?: string | null
+  endpointId?: string,
+  reqOrigin?: string | null,
+  options?: { isCombo?: boolean }
 ): TokenVerificationResult {
   if (!token || typeof token !== 'string') {
     return { valid: false, error: 'Missing token' };
@@ -212,16 +223,36 @@ export function verifyMcpAccessToken(
     return { valid: false, error: 'Token not active yet' };
   }
 
-  // 4. Endpoint binding check
-  if (!payload.endpoint_id || payload.endpoint_id !== endpointId) {
+  // If no specific endpointId provided for check, return valid payload
+  if (!endpointId) {
+    return { valid: true, payload };
+  }
+
+  // 4. Endpoint/Combo binding check
+  const matchesTargetId =
+    payload.endpoint_id === endpointId ||
+    payload.endpoint_id === `combo_${endpointId}` ||
+    (endpointId.startsWith('combo_') && payload.endpoint_id === endpointId.replace(/^combo_/, '')) ||
+    (payload.endpoint_id.startsWith('combo_') && payload.endpoint_id.replace(/^combo_/, '') === endpointId);
+
+  if (!matchesTargetId) {
     return { valid: false, error: 'Token not issued for this endpoint' };
   }
 
   // 5. Audience / Resource check
-  const canonicalResource = resolveResourceUrl(endpointId, reqOrigin);
+  const issuer = resolveIssuer(reqOrigin);
+  const canonicalEndpointResource = `${issuer}/api/mcp/${endpointId}/http`;
+  const canonicalComboResource = `${issuer}/api/mcp/combo/${endpointId}/http`;
+  const strippedId = endpointId.startsWith('combo_') ? endpointId.replace(/^combo_/, '') : '';
+  const canonicalStrippedComboResource = strippedId ? `${issuer}/api/mcp/combo/${strippedId}/http` : '';
+
   const resourceMatches =
-    payload.aud === canonicalResource ||
+    payload.aud === canonicalEndpointResource ||
+    payload.aud === canonicalComboResource ||
+    (Boolean(canonicalStrippedComboResource) && payload.aud === canonicalStrippedComboResource) ||
+    payload.aud.endsWith(`/api/mcp/combo/${endpointId}/http`) ||
     payload.aud.endsWith(`/api/mcp/${endpointId}/http`) ||
+    (Boolean(strippedId) && payload.aud.endsWith(`/api/mcp/combo/${strippedId}/http`)) ||
     payload.aud === endpointId;
 
   if (!resourceMatches) {

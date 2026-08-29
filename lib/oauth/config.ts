@@ -100,15 +100,18 @@ export function getCanonicalResourceUrl(endpointId: string, reqOrigin?: string |
 }
 
 /**
- * Safely extracts the canonical endpoint ID from an RFC 8707 resource indicator URL or path.
- * Accepts canonical forms:
- * - https://<domain>/api/mcp/<endpoint-id>/http
- * - https://<domain>/api/mcp/<endpoint-id>
- * - /api/mcp/<endpoint-id>/http
- * - /api/mcp/<endpoint-id>
- * Validates endpoint ID format ([a-zA-Z0-9_-]{1,64}) to prevent path traversal and injection.
+ * Returns the canonical MCP resource URL for a given Combo.
+ * Format: https://<domain>/api/mcp/combo/<combo-id>/http
  */
-export function extractEndpointIdFromResource(resource: string | null | undefined): string | null {
+export function getCanonicalComboResourceUrl(comboId: string, reqOrigin?: string | null): string {
+  const issuer = getCanonicalIssuerUrl(reqOrigin);
+  return `${issuer}/api/mcp/combo/${comboId}/http`;
+}
+
+/**
+ * Extracts target resource identity and type (combo or endpoint) from RFC 8707 resource indicator.
+ */
+export function extractResourceTarget(resource: string | null | undefined): { type: 'combo' | 'endpoint'; id: string } | null {
   if (!resource || typeof resource !== 'string') return null;
   const trimmed = resource.trim();
   if (!trimmed) return null;
@@ -120,14 +123,27 @@ export function extractEndpointIdFromResource(resource: string | null | undefine
       path = parsed.pathname;
     }
 
+    const comboMatch = path.match(/^\/?api\/mcp\/combo\/([a-zA-Z0-9_-]{1,64})(?:\/.*)?$/);
+    if (comboMatch && comboMatch[1]) {
+      return { type: 'combo', id: comboMatch[1] };
+    }
+
     const match = path.match(/^\/?api\/mcp\/([a-zA-Z0-9_-]{1,64})(?:\/.*)?$/);
-    if (match && match[1]) {
-      return match[1];
+    if (match && match[1] && match[1] !== 'combo') {
+      return { type: 'endpoint', id: match[1] };
     }
   } catch {
     return null;
   }
   return null;
+}
+
+/**
+ * Safely extracts the canonical endpoint or combo ID from an RFC 8707 resource indicator URL or path.
+ */
+export function extractEndpointIdFromResource(resource: string | null | undefined): string | null {
+  const target = extractResourceTarget(resource);
+  return target ? target.id : null;
 }
 
 /**

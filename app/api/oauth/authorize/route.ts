@@ -71,24 +71,26 @@ export async function GET(req: Request) {
     );
   }
 
-  // Resolve target endpoint with authoritative priority:
-  // Priority 1: Explicit endpoint_id parameter
-  let targetEndpointId: string | undefined = endpointIdParam && endpointIdParam.trim() ? endpointIdParam.trim() : undefined;
+  // Resolve target endpoint or combo with authoritative priority:
+  let targetId: string | undefined = endpointIdParam && endpointIdParam.trim() ? endpointIdParam.trim() : undefined;
+  let isComboTarget = false;
 
-  // Priority 2: Endpoint extracted from canonical resource URL
-  if (!targetEndpointId && resource) {
-    const extracted = extractEndpointIdFromResource(resource);
-    if (extracted) {
-      targetEndpointId = extracted;
+  if (resource) {
+    const targetInfo = extractResourceTarget(resource);
+    if (targetInfo) {
+      targetId = targetInfo.id;
+      isComboTarget = targetInfo.type === 'combo';
     }
   }
 
-  // Priority 3: Authoritative client.endpoint_id fallback
-  if (!targetEndpointId && client.endpoint_id) {
-    targetEndpointId = client.endpoint_id;
+  if (!targetId && client.combo_id) {
+    targetId = client.combo_id;
+    isComboTarget = true;
+  } else if (!targetId && client.endpoint_id) {
+    targetId = client.endpoint_id;
+    isComboTarget = false;
   }
 
-  // Priority 4: Single active endpoint fallback (if authenticated session exists)
   const session = await getServerSession(authOptions);
   let user: any = null;
   if (session?.user?.email) {
@@ -97,54 +99,92 @@ export async function GET(req: Request) {
     });
   }
 
-  if (!targetEndpointId && user) {
+  if (!targetId && user) {
     const userEndpoints = await prisma.mcpEndpoint.findMany({
       where: { user_id: user.id, is_active: true },
       select: { id: true },
     });
     if (userEndpoints.length === 1) {
-      targetEndpointId = userEndpoints[0].id;
+      targetId = userEndpoints[0].id;
     }
   }
 
-  let targetEndpoint: any = null;
-  if (targetEndpointId) {
-    targetEndpoint = await prisma.mcpEndpoint.findUnique({
-      where: { id: targetEndpointId },
-      select: { id: true, name: true, is_active: true, user_id: true },
-    });
+  let targetDisplay: any = null;
+
+  if (targetId) {
+    if (isComboTarget || client.combo_id) {
+      const combo = await prisma.combo.findUnique({
+        where: { id: targetId },
+        include: {
+          endpoints: {
+            include: {
+              endpoint: {
+                include: {
+                  services: true,
+                },
+              },
+            },
+          },
+        },
+      });
+
+      if (combo) {
+        targetDisplay = {
+          id: combo.id,
+          name: combo.name,
+          is_active: combo.is_active,
+          user_id: combo.user_id,
+          is_combo: true,
+          services: combo.endpoints.flatMap((e) => e.endpoint?.services || []),
+        };
+      }
+    } else {
+      const endpoint = await prisma.mcpEndpoint.findUnique({
+        where: { id: targetId },
+        include: { services: true },
+      });
+
+      if (endpoint) {
+        targetDisplay = {
+          id: endpoint.id,
+          name: endpoint.name,
+          is_active: endpoint.is_active,
+          user_id: endpoint.user_id,
+          is_combo: false,
+          services: endpoint.services || [],
+        };
+      }
+    }
   }
 
-  // Security Check 1: Target endpoint must exist and be active if resolved
-  if (targetEndpointId && (!targetEndpoint || !targetEndpoint.is_active)) {
+  // Security Check 1: Target must exist and be active if resolved
+  if (targetId && (!targetDisplay || !targetDisplay.is_active)) {
     return NextResponse.json(
       {
         error: 'invalid_target',
-        error_description: 'Target MCP endpoint not found or inactive',
+        error_description: 'Target MCP resource not found or inactive',
       },
       { status: 400 }
     );
   }
 
   // Security Check 2: Multi-Endpoint Tenant Isolation Check
-  // If the OAuth client has a registered owner (client.user_id),
-  // then any requested target endpoint MUST belong to that SAME user.
-  if (client.user_id && targetEndpoint && targetEndpoint.user_id !== client.user_id) {
+  if (client.user_id && targetDisplay && targetDisplay.user_id !== client.user_id) {
     recordSecurityEvent({
       eventType: 'AUTH_FAILED',
       route: '/api/oauth/authorize',
-      reason: 'Cross-user endpoint authorization attempt blocked',
+      reason: 'Cross-user resource authorization attempt blocked',
       metadata: {
         client_id: client.client_id,
         client_user_id: client.user_id,
-        target_endpoint_user_id: targetEndpoint.user_id,
-        target_endpoint_id: targetEndpoint.id,
+        target_resource_user_id: targetDisplay.user_id,
+        target_resource_id: targetDisplay.id,
       },
     });
     return NextResponse.json(
       {
         error: 'access_denied',
-        error_description: 'OAuth client is not authorized to access endpoints belonging to another user',
+        error_description: 'OAuth client is not authorized to access resources belonging to another user',
       },
       { status: 403 }
     );
@@ -157,7 +197,7 @@ export async function GET(req: Request) {
       logo_uri: client.logo_uri,
       client_uri: client.client_uri,
     },
-    endpoint: targetEndpoint,
+    endpoint: targetDisplay,
     scope: url.searchParams.get('scope') || client.scope || 'mcp:read mcp:write',
   });
 }
@@ -325,86 +365,105 @@ export async function POST(req: Request) {
     return NextResponse.json({ redirect_url: redirectUrl });
   }
 
-  // 6. Resolve MCP Endpoint with strict authoritative priority:
-  // Priority 1: Explicit endpoint_id parameter
-  let targetEndpointId: string | undefined = endpointIdParam && typeof endpointIdParam === 'string' && endpointIdParam.trim() ? endpointIdParam.trim() : undefined;
+  // 6. Resolve MCP Endpoint or Combo with strict authoritative priority:
+  let targetId: string | undefined = endpointIdParam && typeof endpointIdParam === 'string' && endpointIdParam.trim() ? endpointIdParam.trim() : undefined;
+  let isComboTarget = false;
 
-  // Priority 2: Endpoint extracted from canonical resource URL
-  if (!targetEndpointId && resource) {
-    const extracted = extractEndpointIdFromResource(resource);
-    if (extracted) {
-      targetEndpointId = extracted;
+  if (resource) {
+    const targetInfo = extractResourceTarget(resource);
+    if (targetInfo) {
+      targetId = targetInfo.id;
+      isComboTarget = targetInfo.type === 'combo';
     }
   }
 
-  // Priority 3: Authoritative client.endpoint_id fallback
-  if (!targetEndpointId && client.endpoint_id) {
-    targetEndpointId = client.endpoint_id;
+  if (!targetId && client.combo_id) {
+    targetId = client.combo_id;
+    isComboTarget = true;
+  } else if (!targetId && client.endpoint_id) {
+    targetId = client.endpoint_id;
+    isComboTarget = false;
   }
 
-  // Priority 4: Single active endpoint fallback
-  if (!targetEndpointId) {
+  // Fallback: Single active endpoint or single active combo
+  if (!targetId) {
     const userEndpoints = await prisma.mcpEndpoint.findMany({
       where: { user_id: user.id, is_active: true },
       select: { id: true },
     });
+    const userCombos = await prisma.combo.findMany({
+      where: { user_id: user.id, is_active: true },
+      select: { id: true },
+    });
 
-    if (userEndpoints.length === 1) {
-      targetEndpointId = userEndpoints[0].id;
+    if (userEndpoints.length === 1 && userCombos.length === 0) {
+      targetId = userEndpoints[0].id;
+      isComboTarget = false;
+    } else if (userCombos.length === 1 && userEndpoints.length === 0) {
+      targetId = userCombos[0].id;
+      isComboTarget = true;
     } else {
-      // Priority 5: Ambiguous / multiple endpoints without binding -> return invalid_target
       recordSecurityEvent({
         eventType: 'AUTH_FAILED',
         route: '/api/oauth/authorize',
         userId: user.id,
-        reason: 'Target MCP endpoint could not be determined or user has multiple endpoints',
+        reason: 'Target MCP resource could not be determined or user has multiple active resources',
         metadata: { client_id: clientId },
       });
       const redirectUrl = createRedirectUrl(finalRedirectUri, {
         error: 'invalid_target',
-        error_description: 'Target MCP endpoint could not be determined or user has multiple endpoints',
+        error_description: 'Target MCP resource could not be determined or user has multiple resources',
         state,
       });
       return NextResponse.json({ redirect_url: redirectUrl });
     }
   }
 
-  // Verify endpoint ownership and active status
-  const endpoint = await prisma.mcpEndpoint.findFirst({
-    where: {
-      id: targetEndpointId,
-      user_id: user.id,
-    },
-  });
+  let targetResource: any = null;
 
-  if (!endpoint || !endpoint.is_active) {
+  if (isComboTarget || client.combo_id) {
+    targetResource = await prisma.combo.findFirst({
+      where: {
+        id: targetId,
+        user_id: user.id,
+      },
+    });
+  } else {
+    targetResource = await prisma.mcpEndpoint.findFirst({
+      where: {
+        id: targetId,
+        user_id: user.id,
+      },
+    });
+  }
+
+  if (!targetResource || !targetResource.is_active) {
     recordSecurityEvent({
       eventType: 'ACCESS_DENIED',
-      endpointId: targetEndpointId,
+      endpointId: targetId,
       userId: user.id,
       route: '/api/oauth/authorize',
       ip,
-      reason: 'Endpoint not found, inactive, or not owned by user',
+      reason: 'Resource not found, inactive, or not owned by user',
     });
 
     const redirectUrl = createRedirectUrl(finalRedirectUri, {
       error: 'access_denied',
-      error_description: 'Selected MCP endpoint is inactive or unauthorized for this user',
+      error_description: 'Selected MCP resource is inactive or unauthorized for this user',
       state,
     });
     return NextResponse.json({ redirect_url: redirectUrl });
   }
 
-  // Tenant Isolation Security Check:
-  // If client.user_id is set, it MUST match the authenticated user and endpoint owner
+  // Tenant Isolation Security Check
   if (client.user_id && client.user_id !== user.id) {
     recordSecurityEvent({
       eventType: 'ACCESS_DENIED',
-      endpointId: endpoint.id,
+      endpointId: targetResource.id,
       userId: user.id,
       route: '/api/oauth/authorize',
       ip,
-      reason: 'Client owner does not match endpoint owner',
+      reason: 'Client owner does not match resource owner',
       metadata: {
         client_id: client.client_id,
         client_user_id: client.user_id,
@@ -414,7 +473,7 @@ export async function POST(req: Request) {
 
     const redirectUrl = createRedirectUrl(finalRedirectUri, {
       error: 'access_denied',
-      error_description: 'OAuth client is not authorized to access endpoints belonging to another user',
+      error_description: 'OAuth client is not authorized to access resources belonging to another user',
       state,
     });
     return NextResponse.json({ redirect_url: redirectUrl });
@@ -424,23 +483,24 @@ export async function POST(req: Request) {
   const authCode = await createAuthorizationCode({
     clientId,
     userId: user.id,
-    endpointId: endpoint.id,
+    endpointId: targetResource.id,
     redirectUri: finalRedirectUri,
     codeChallenge,
     codeChallengeMethod: 'S256',
     scope: scope || client.scope || 'mcp:read mcp:write',
-    resource,
+    resource: resource || (isComboTarget ? `/api/mcp/combo/${targetResource.id}/http` : `/api/mcp/${targetResource.id}/http`),
   });
 
   recordSecurityEvent({
     eventType: 'OAUTH_AUTHORIZATION_STARTED',
-    endpointId: endpoint.id,
+    endpointId: targetResource.id,
     userId: user.id,
     route: '/api/oauth/authorize',
     ip,
     metadata: {
       client_id: clientId,
       scope: scope || client.scope,
+      is_combo: isComboTarget,
     },
   });
 
@@ -451,3 +511,4 @@ export async function POST(req: Request) {
 
   return NextResponse.json({ redirect_url: redirectUrl });
 }
+

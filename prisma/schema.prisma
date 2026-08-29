@@ -252,18 +252,21 @@ model OAuthClient {
   software_version           String?
   client_secret_expires_at   DateTime?
   endpoint_id                String?
+  combo_id                   String?
   user_id                    String?
   is_active                  Boolean   @default(true)
   created_at                 DateTime  @default(now())
   updated_at                 DateTime  @updatedAt
 
   endpoint       McpEndpoint?             @relation(fields: [endpoint_id], references: [id], onDelete: Cascade)
+  combo          Combo?                   @relation(fields: [combo_id], references: [id], onDelete: Cascade)
   user           User?                    @relation(fields: [user_id], references: [id], onDelete: Cascade)
   codes          OAuthAuthorizationCode[]
   refresh_tokens OAuthRefreshToken[]
 
   @@index([client_id])
   @@index([endpoint_id])
+  @@index([combo_id])
   @@index([user_id])
   @@index([is_active])
 }
@@ -335,8 +338,9 @@ model Combo {
   created_at  DateTime @default(now())
   updated_at  DateTime @updatedAt
 
-  user        User            @relation(fields: [user_id], references: [id], onDelete: Cascade)
-  endpoints   ComboEndpoint[]
+  user          User            @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  endpoints     ComboEndpoint[]
+  oauth_clients OAuthClient[]
 
   @@index([user_id])
   @@index([is_active])

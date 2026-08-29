@@ -30,6 +30,8 @@ interface AuthorizeData {
     id: string;
     name: string;
     is_active: boolean;
+    is_combo?: boolean;
+    services?: Array<{ id?: string; service_type: string }>;
   };
   scope: string;
 }
@@ -208,10 +210,15 @@ function AuthorizeContent() {
               </div>
             </div>
 
-            {/* Target Endpoint Box */}
-            <div className="p-4 rounded-xl bg-[var(--color-surface-elevated)] border-2 border-[var(--color-border)] shadow-[2px_2px_0px_0px_rgba(15,23,42,1)] space-y-1">
-              <div className="text-[10px] font-mono font-black text-[var(--color-text-muted)] uppercase">
-                Target MCP Endpoint:
+            {/* Target Endpoint / Combo Box */}
+            <div className="p-4 rounded-xl bg-[var(--color-surface-elevated)] border-2 border-[var(--color-border)] shadow-[2px_2px_0px_0px_rgba(15,23,42,1)] space-y-2">
+              <div className="flex items-center justify-between text-[10px] font-mono font-black text-[var(--color-text-muted)] uppercase">
+                <span>{authData.endpoint?.is_combo ? 'Target MCP Combo:' : 'Target MCP Endpoint:'}</span>
+                {authData.endpoint?.is_combo && (
+                  <span className="pop-badge bg-amber-400 text-slate-950 px-1.5 py-0 text-[9px] font-mono font-black">
+                    COMBO BUNDLE
+                  </span>
+                )}
               </div>
               <div className="flex items-center gap-2">
                 <Server className="h-4 w-4 text-sky-500 stroke-[2.5]" />
@@ -219,9 +226,26 @@ function AuthorizeContent() {
                   {authData.endpoint?.name || 'All Assigned MCP Tools'}
                 </span>
               </div>
+              {authData.endpoint?.services && authData.endpoint.services.length > 0 && (
+                <div className="pt-1.5 border-t border-[var(--color-border)] space-y-1">
+                  <span className="text-[10px] font-mono font-bold text-[var(--color-text-muted)] uppercase">
+                    Connected Services:
+                  </span>
+                  <div className="flex flex-wrap gap-1">
+                    {authData.endpoint.services.map((s, idx) => (
+                      <span
+                        key={idx}
+                        className="pop-badge bg-amber-200 dark:bg-amber-950 text-slate-900 dark:text-amber-200 border border-[var(--color-border)] text-[9px] font-mono font-black px-1.5 py-0 capitalize"
+                      >
+                        ✓ {s.service_type}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
               {authData.endpoint?.id && (
                 <div className="text-[10px] font-mono text-[var(--color-text-muted)] truncate">
-                  Endpoint ID: {authData.endpoint.id}
+                  ID: {authData.endpoint.id}
                 </div>
               )}
             </div>

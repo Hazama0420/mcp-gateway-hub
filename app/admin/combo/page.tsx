@@ -21,6 +21,7 @@ import {
   RotateCcw,
   Sparkles,
   Wrench,
+  Key,
 } from 'lucide-react';
 import { AppShell } from '@/components/AppShell';
 import { Button } from '@/components/ui/button';
@@ -30,6 +31,7 @@ import { EmptyState } from '@/components/ui/empty-state';
 import { StatusBadge } from '@/components/ui/status-badge';
 import { CreateComboModal } from '@/components/combo/create-combo-modal';
 import { EditComboModal } from '@/components/combo/edit-combo-modal';
+import { ComboOAuthModal } from '@/components/combo/combo-oauth-modal';
 import {
   Dialog,
   DialogContent,
@@ -72,6 +74,7 @@ export default function ComboPage() {
 
   const [isCreateOpen, setIsCreateOpen] = React.useState(false);
   const [editCombo, setEditCombo] = React.useState<Combo | null>(null);
+  const [selectedOAuthCombo, setSelectedOAuthCombo] = React.useState<Combo | null>(null);
   const [deleteCandidate, setDeleteCandidate] = React.useState<Combo | null>(null);
   const [deleting, setDeleting] = React.useState(false);
   const [togglingId, setTogglingId] = React.useState<string | null>(null);
@@ -429,15 +432,27 @@ export default function ComboPage() {
 
                   {/* Actions Footer */}
                   <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t-2 border-black/5 dark:border-white/5">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setEditCombo(combo)}
-                      className="pop-btn h-8 px-3 text-xs bg-amber-300/40 dark:bg-amber-950/50 text-[var(--color-text-primary)] hover:bg-amber-300 gap-1.5 font-bold"
-                    >
-                      <Wrench className="h-3.5 w-3.5" />
-                      Edit Combo
-                    </Button>
+                    <div className="flex items-center gap-1.5">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setEditCombo(combo)}
+                        className="pop-btn h-8 px-2.5 text-xs bg-amber-300/40 dark:bg-amber-950/50 text-[var(--color-text-primary)] hover:bg-amber-300 gap-1 font-bold"
+                      >
+                        <Wrench className="h-3.5 w-3.5" />
+                        <span>Edit</span>
+                      </Button>
+
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setSelectedOAuthCombo(combo)}
+                        className="pop-btn h-8 px-2.5 text-xs bg-[var(--color-surface-elevated)] text-[var(--color-text-primary)] hover:bg-amber-300 gap-1 font-bold"
+                      >
+                        <Key className="h-3.5 w-3.5 text-amber-500" />
+                        <span>Setup / OAuth</span>
+                      </Button>
+                    </div>
 
                     <div className="flex items-center gap-2">
                       <Link
@@ -508,6 +523,12 @@ export default function ComboPage() {
         combo={editCombo}
         onSuccess={fetchCombos}
       />
+      <ComboOAuthModal
+        open={Boolean(selectedOAuthCombo)}
+        onOpenChange={(open) => !open && setSelectedOAuthCombo(null)}
+        combo={selectedOAuthCombo}
+      />
     </AppShell>
   );
 }
+
