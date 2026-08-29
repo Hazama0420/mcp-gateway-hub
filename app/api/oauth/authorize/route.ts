@@ -72,10 +72,10 @@ export async function GET(req: Request) {
   }
 
   // Resolve target endpoint with authoritative priority:
-  // 1. Explicit endpoint_id parameter
+  // Priority 1: Explicit endpoint_id parameter
   let targetEndpointId: string | undefined = endpointIdParam && endpointIdParam.trim() ? endpointIdParam.trim() : undefined;
 
-  // 2. Endpoint extracted from canonical resource URL
+  // Priority 2: Endpoint extracted from canonical resource URL
   if (!targetEndpointId && resource) {
     const extracted = extractEndpointIdFromResource(resource);
     if (extracted) {
@@ -83,33 +83,12 @@ export async function GET(req: Request) {
     }
   }
 
-  // 3. Authoritative client.endpoint_id binding
+  // Priority 3: Authoritative client.endpoint_id fallback
   if (!targetEndpointId && client.endpoint_id) {
     targetEndpointId = client.endpoint_id;
   }
 
-  // Security Check: If client is bound to an endpoint, any requested targetEndpointId MUST match client.endpoint_id
-  if (client.endpoint_id && targetEndpointId && client.endpoint_id !== targetEndpointId) {
-    recordSecurityEvent({
-      eventType: 'AUTH_FAILED',
-      route: '/api/oauth/authorize',
-      reason: 'OAuth client endpoint mismatch during GET authorize',
-      metadata: {
-        client_id: client.client_id,
-        client_endpoint_id: client.endpoint_id,
-        target_endpoint_id: targetEndpointId,
-      },
-    });
-    return NextResponse.json(
-      {
-        error: 'invalid_request',
-        error_description: 'OAuth client is not authorized for the requested endpoint',
-      },
-      { status: 400 }
-    );
-  }
-
-  // 4. Single active endpoint fallback (if authenticated session exists)
+  // Priority 4: Single active endpoint fallback (if authenticated session exists)
   const session = await getServerSession(authOptions);
   let user: any = null;
   if (session?.user?.email) {
@@ -134,6 +113,41 @@ export async function GET(req: Request) {
       where: { id: targetEndpointId },
       select: { id: true, name: true, is_active: true, user_id: true },
     });
+  }
+
+  // Security Check 1: Target endpoint must exist and be active if resolved
+  if (targetEndpointId && (!targetEndpoint || !targetEndpoint.is_active)) {
+    return NextResponse.json(
+      {
+        error: 'invalid_target',
+        error_description: 'Target MCP endpoint not found or inactive',
+      },
+      { status: 400 }
+    );
+  }
+
+  // Security Check 2: Multi-Endpoint Tenant Isolation Check
+  // If the OAuth client has a registered owner (client.user_id),
+  // then any requested target endpoint MUST belong to that SAME user.
+  if (client.user_id && targetEndpoint && targetEndpoint.user_id !== client.user_id) {
+    recordSecurityEvent({
+      eventType: 'AUTH_FAILED',
+      route: '/api/oauth/authorize',
+      reason: 'Cross-user endpoint authorization attempt blocked',
+      metadata: {
+        client_id: client.client_id,
+        client_user_id: client.user_id,
+        target_endpoint_user_id: targetEndpoint.user_id,
+        target_endpoint_id: targetEndpoint.id,
+      },
+    });
+    return NextResponse.json(
+      {
+        error: 'access_denied',
+        error_description: 'OAuth client is not authorized to access endpoints belonging to another user',
+      },
+      { status: 403 }
+    );
   }
 
   return NextResponse.json({
@@ -323,30 +337,9 @@ export async function POST(req: Request) {
     }
   }
 
-  // Priority 3: Authoritative client.endpoint_id binding
+  // Priority 3: Authoritative client.endpoint_id fallback
   if (!targetEndpointId && client.endpoint_id) {
     targetEndpointId = client.endpoint_id;
-  }
-
-  // Security Check: If client is bound to an endpoint, any targetEndpointId MUST match client.endpoint_id
-  if (client.endpoint_id && targetEndpointId && client.endpoint_id !== targetEndpointId) {
-    recordSecurityEvent({
-      eventType: 'AUTH_FAILED',
-      route: '/api/oauth/authorize',
-      userId: user.id,
-      reason: 'OAuth client endpoint mismatch during POST authorize',
-      metadata: {
-        client_id: client.client_id,
-        client_endpoint_id: client.endpoint_id,
-        target_endpoint_id: targetEndpointId,
-      },
-    });
-    const redirectUrl = createRedirectUrl(finalRedirectUri, {
-      error: 'invalid_request',
-      error_description: 'OAuth client is not authorized for the requested endpoint',
-      state,
-    });
-    return NextResponse.json({ redirect_url: redirectUrl });
   }
 
   // Priority 4: Single active endpoint fallback
@@ -397,6 +390,31 @@ export async function POST(req: Request) {
     const redirectUrl = createRedirectUrl(finalRedirectUri, {
       error: 'access_denied',
       error_description: 'Selected MCP endpoint is inactive or unauthorized for this user',
+      state,
+    });
+    return NextResponse.json({ redirect_url: redirectUrl });
+  }
+
+  // Tenant Isolation Security Check:
+  // If client.user_id is set, it MUST match the authenticated user and endpoint owner
+  if (client.user_id && client.user_id !== user.id) {
+    recordSecurityEvent({
+      eventType: 'ACCESS_DENIED',
+      endpointId: endpoint.id,
+      userId: user.id,
+      route: '/api/oauth/authorize',
+      ip,
+      reason: 'Client owner does not match endpoint owner',
+      metadata: {
+        client_id: client.client_id,
+        client_user_id: client.user_id,
+        auth_user_id: user.id,
+      },
+    });
+
+    const redirectUrl = createRedirectUrl(finalRedirectUri, {
+      error: 'access_denied',
+      error_description: 'OAuth client is not authorized to access endpoints belonging to another user',
       state,
     });
     return NextResponse.json({ redirect_url: redirectUrl });

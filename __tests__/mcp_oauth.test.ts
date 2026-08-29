@@ -650,17 +650,18 @@ async function runOAuthTests() {
   assert('Test H2: Inactive/revoked client in UI displays Delete action', activeUiAction({ is_active: false }) === 'Delete');
 
   // =========================================================================
-  // 17. Multi-Endpoint OAuth Authorization Resolution (Tests 1-12)
+  // 17. Multi-Endpoint OAuth Authorization Resolution (Tests 1-15)
   // =========================================================================
-  console.log('\n--- 17. Multi-Endpoint OAuth Authorization Resolution (Tests 1-12) ---');
+  console.log('\n--- 17. Multi-Endpoint OAuth Authorization Resolution (Tests 1-15) ---');
 
   // Endpoint resolution helper simulating the authoritative priority logic
   function resolveTargetEndpoint(params: {
     endpointIdParam?: string;
     resource?: string;
-    client: { client_id: string; endpoint_id?: string | null };
-    userEndpoints: Array<{ id: string; name: string; is_active: boolean }>;
-  }): { targetEndpointId?: string; error?: string } {
+    client: { client_id: string; user_id?: string | null; endpoint_id?: string | null };
+    userEndpoints: Array<{ id: string; name: string; user_id: string; is_active: boolean }>;
+    authUserId?: string;
+  }): { targetEndpointId?: string; targetEndpoint?: any; error?: string } {
     let targetEndpointId: string | undefined =
       params.endpointIdParam && params.endpointIdParam.trim() ? params.endpointIdParam.trim() : undefined;
 
@@ -675,11 +676,6 @@ async function runOAuthTests() {
       targetEndpointId = params.client.endpoint_id;
     }
 
-    // Security Check: If client is bound to an endpoint, targetEndpointId MUST match
-    if (params.client.endpoint_id && targetEndpointId && params.client.endpoint_id !== targetEndpointId) {
-      return { error: 'invalid_request: OAuth client is not authorized for the requested endpoint' };
-    }
-
     if (!targetEndpointId) {
       if (params.userEndpoints.length === 1) {
         targetEndpointId = params.userEndpoints[0].id;
@@ -688,118 +684,172 @@ async function runOAuthTests() {
       }
     }
 
-    return { targetEndpointId };
+    const targetEndpoint = params.userEndpoints.find(e => e.id === targetEndpointId);
+    if (!targetEndpoint || !targetEndpoint.is_active) {
+      return { error: 'invalid_target: Target MCP endpoint not found or inactive' };
+    }
+
+    // Tenant Isolation Security Check:
+    // If the OAuth client has a registered owner (client.user_id),
+    // then the target endpoint MUST belong to that SAME user.
+    if (params.client.user_id && targetEndpoint.user_id !== params.client.user_id) {
+      return { error: 'access_denied: OAuth client is not authorized to access endpoints belonging to another user' };
+    }
+
+    return { targetEndpointId, targetEndpoint };
   }
 
-  const epVercel = { id: 'ep_vercel_111', name: 'Vercel Endpoint', is_active: true };
-  const epNeon = { id: 'ep_neon_222', name: 'Neon Endpoint', is_active: true };
-  const epGithub = { id: 'ep_github_333', name: 'GitHub Endpoint', is_active: true };
+  const userA = 'user_owner_111';
+  const userB = 'user_attacker_222';
+
+  const epVercel = { id: 'ep_vercel_111', name: 'Vercel Endpoint', user_id: userA, is_active: true };
+  const epNeon = { id: 'ep_neon_222', name: 'Neon Endpoint', user_id: userA, is_active: true };
+  const epGithub = { id: 'ep_github_333', name: 'GitHub Endpoint', user_id: userA, is_active: true };
+  const epForeign = { id: 'ep_foreign_999', name: 'Victim Endpoint', user_id: userB, is_active: true };
+
+  const allEndpoints = [epVercel, epNeon, epGithub, epForeign];
+  const userAEndpoints = [epVercel, epNeon, epGithub];
 
   // Test 1: User has one endpoint -> authorize -> single endpoint fallback succeeds
   const res1 = resolveTargetEndpoint({
-    client: { client_id: 'client_generic', endpoint_id: null },
+    client: { client_id: 'client_generic', user_id: userA, endpoint_id: null },
     userEndpoints: [epVercel],
   });
   assert('Test 1: Single active endpoint fallback resolves correctly', res1.targetEndpointId === 'ep_vercel_111' && !res1.error);
 
   // Test 2: User has Vercel + Neon -> Vercel client -> resolves to Vercel
   const res2 = resolveTargetEndpoint({
-    client: { client_id: 'client_vercel', endpoint_id: 'ep_vercel_111' },
-    userEndpoints: [epVercel, epNeon],
+    client: { client_id: 'client_vercel', user_id: userA, endpoint_id: 'ep_vercel_111' },
+    userEndpoints: userAEndpoints,
   });
   assert('Test 2: Multiple endpoints (Vercel+Neon) with Vercel client resolves to Vercel', res2.targetEndpointId === 'ep_vercel_111' && !res2.error);
 
   // Test 3: User has Vercel + Neon -> Neon client -> resolves to Neon
   const res3 = resolveTargetEndpoint({
-    client: { client_id: 'client_neon', endpoint_id: 'ep_neon_222' },
-    userEndpoints: [epVercel, epNeon],
+    client: { client_id: 'client_neon', user_id: userA, endpoint_id: 'ep_neon_222' },
+    userEndpoints: userAEndpoints,
   });
   assert('Test 3: Multiple endpoints (Vercel+Neon) with Neon client resolves to Neon', res3.targetEndpointId === 'ep_neon_222' && !res3.error);
 
   // Test 4: User has Vercel + Neon + GitHub -> GitHub client -> resolves to GitHub
   const res4 = resolveTargetEndpoint({
-    client: { client_id: 'client_github', endpoint_id: 'ep_github_333' },
-    userEndpoints: [epVercel, epNeon, epGithub],
+    client: { client_id: 'client_github', user_id: userA, endpoint_id: 'ep_github_333' },
+    userEndpoints: userAEndpoints,
   });
   assert('Test 4: Multiple endpoints (Vercel+Neon+GitHub) with GitHub client resolves to GitHub', res4.targetEndpointId === 'ep_github_333' && !res4.error);
 
-  // Test 5: Standard OAuth request (no endpoint_id, no resource) uses client.endpoint_id
+  // Test 5: Standard OAuth request without query params authoritative uses client.endpoint_id fallback
   const res5 = resolveTargetEndpoint({
     endpointIdParam: undefined,
     resource: undefined,
-    client: { client_id: 'client_github', endpoint_id: 'ep_github_333' },
-    userEndpoints: [epVercel, epNeon, epGithub],
+    client: { client_id: 'client_github', user_id: userA, endpoint_id: 'ep_github_333' },
+    userEndpoints: userAEndpoints,
   });
-  assert('Test 5: Standard OAuth request without query params authoritative uses client.endpoint_id', res5.targetEndpointId === 'ep_github_333' && !res5.error);
+  assert('Test 5: Standard OAuth request without query params authoritative uses client.endpoint_id fallback', res5.targetEndpointId === 'ep_github_333' && !res5.error);
 
-  // Test 6: Explicit endpoint_id mismatches client.endpoint_id -> strictly rejected
+  // Test 6: Same client authorizing Vercel via resource indicator -> SUCCESS (Same owner)
   const res6 = resolveTargetEndpoint({
-    endpointIdParam: 'ep_neon_222', // Attacker requests Neon endpoint
-    client: { client_id: 'client_vercel', endpoint_id: 'ep_vercel_111' }, // Using Vercel client
-    userEndpoints: [epVercel, epNeon, epGithub],
+    resource: 'https://mcp-gateway-hub-beta.vercel.app/api/mcp/ep_vercel_111/http',
+    client: { client_id: 'client_gemini_shared', user_id: userA, endpoint_id: 'ep_neon_222' },
+    userEndpoints: userAEndpoints,
   });
-  assert('Test 6: Explicit endpoint_id mismatch with client.endpoint_id is REJECTED', Boolean(res6.error && res6.error.includes('invalid_request')));
+  assert('Test 6: Same client authorizing Vercel via resource URL succeeds (Same owner)', res6.targetEndpointId === 'ep_vercel_111' && !res6.error);
 
-  // Test 7: Resource URL endpoint mismatches client.endpoint_id -> strictly rejected
+  // Test 7: Same client authorizing Neon via resource indicator -> SUCCESS (Same owner)
   const res7 = resolveTargetEndpoint({
-    resource: 'https://mcp-gateway-hub-beta.vercel.app/api/mcp/ep_neon_222/http', // Resource points to Neon
-    client: { client_id: 'client_vercel', endpoint_id: 'ep_vercel_111' }, // Using Vercel client
-    userEndpoints: [epVercel, epNeon, epGithub],
+    resource: 'https://mcp-gateway-hub-beta.vercel.app/api/mcp/ep_neon_222/http',
+    client: { client_id: 'client_gemini_shared', user_id: userA, endpoint_id: 'ep_neon_222' },
+    userEndpoints: userAEndpoints,
   });
-  assert('Test 7: Resource URL endpoint mismatch with client.endpoint_id is REJECTED', Boolean(res7.error && res7.error.includes('invalid_request')));
+  assert('Test 7: Same client authorizing Neon via resource URL succeeds (Same owner)', res7.targetEndpointId === 'ep_neon_222' && !res7.error);
 
-  // Test 8: No endpoint_id, no resource, multiple endpoints, client.endpoint_id null -> invalid_target
+  // Test 8: Same client authorizing GitHub via resource indicator -> SUCCESS (Same owner)
   const res8 = resolveTargetEndpoint({
-    client: { client_id: 'client_unbound', endpoint_id: null },
-    userEndpoints: [epVercel, epNeon, epGithub],
+    resource: 'https://mcp-gateway-hub-beta.vercel.app/api/mcp/ep_github_333/http',
+    client: { client_id: 'client_gemini_shared', user_id: userA, endpoint_id: 'ep_neon_222' },
+    userEndpoints: userAEndpoints,
   });
-  assert('Test 8: Multiple endpoints without client binding safely returns invalid_target', Boolean(res8.error && res8.error.includes('invalid_target')));
+  assert('Test 8: Same client authorizing GitHub via resource URL succeeds (Same owner)', res8.targetEndpointId === 'ep_github_333' && !res8.error);
 
-  // Test 9: Authorization Code Binding strictly bound to resolved endpoint
+  // Test 9: Same client authorizing foreign user endpoint -> strictly REJECTED (Tenant isolation preserved!)
+  const res9 = resolveTargetEndpoint({
+    resource: 'https://mcp-gateway-hub-beta.vercel.app/api/mcp/ep_foreign_999/http',
+    client: { client_id: 'client_gemini_shared', user_id: userA, endpoint_id: 'ep_neon_222' },
+    userEndpoints: allEndpoints,
+  });
+  assert('Test 9: Cross-user endpoint authorization attempt is strictly REJECTED (access_denied)', Boolean(res9.error && res9.error.includes('access_denied')));
+
+  // Test 10: Inactive endpoint -> strictly rejected
+  const epInactive = { id: 'ep_inactive', name: 'Inactive', user_id: userA, is_active: false };
+  const res10 = resolveTargetEndpoint({
+    resource: 'https://mcp-gateway-hub-beta.vercel.app/api/mcp/ep_inactive/http',
+    client: { client_id: 'client_gemini_shared', user_id: userA, endpoint_id: 'ep_neon_222' },
+    userEndpoints: [epInactive],
+  });
+  assert('Test 10: Inactive endpoint is strictly REJECTED (invalid_target)', Boolean(res10.error && res10.error.includes('invalid_target')));
+
+  // Test 11: Authorization Code Binding strictly bound to resolved target endpoint
   const authCodeRecord = {
     code: 'mcp_code_123',
-    endpoint_id: res4.targetEndpointId,
-    client_id: 'client_github',
+    endpoint_id: res8.targetEndpointId,
+    client_id: 'client_gemini_shared',
   };
-  assert('Test 9: Authorization code is strictly bound to resolved endpoint', authCodeRecord.endpoint_id === 'ep_github_333');
+  assert('Test 11: Authorization code is strictly bound to resolved target endpoint', authCodeRecord.endpoint_id === 'ep_github_333');
 
-  // Test 10: Token Endpoint Binding generates JWT with matching endpoint_id and aud
+  // Test 12: Token Endpoint Binding generates JWT with matching endpoint_id and aud
   const signedToken = signMcpAccessToken({
-    userId: 'user_123',
+    userId: userA,
     endpointId: authCodeRecord.endpoint_id!,
     clientId: authCodeRecord.client_id,
     reqOrigin: 'https://mcp-gateway-hub-beta.vercel.app',
   });
-  assert('Test 10a: Access token payload contains bound endpoint_id', signedToken.payload.endpoint_id === 'ep_github_333');
-  assert('Test 10b: Access token audience binds to canonical endpoint resource URL', signedToken.payload.aud.includes('/api/mcp/ep_github_333/http'));
+  assert('Test 12a: Access token payload contains bound endpoint_id', signedToken.payload.endpoint_id === 'ep_github_333');
+  assert('Test 12b: Access token audience binds to canonical endpoint resource URL', signedToken.payload.aud.includes('/api/mcp/ep_github_333/http'));
 
-  // Test 11: Cross-endpoint token validation is rejected
+  // Test 13: Cross-endpoint token validation is rejected
   const verifyOnWrongEndpoint = verifyMcpAccessToken(
     signedToken.token,
     'ep_vercel_111', // Attempting to use GitHub token on Vercel endpoint
     'https://mcp-gateway-hub-beta.vercel.app'
   );
-  assert('Test 11a: Cross-endpoint token use is REJECTED', verifyOnWrongEndpoint.valid === false);
-  assert('Test 11b: Correct error message returned on cross-endpoint token use', verifyOnWrongEndpoint.valid === false && verifyOnWrongEndpoint.error === 'Token not issued for this endpoint');
+  assert('Test 13a: Cross-endpoint token use is REJECTED', verifyOnWrongEndpoint.valid === false);
+  assert('Test 13b: Correct error message returned on cross-endpoint token use', verifyOnWrongEndpoint.valid === false && verifyOnWrongEndpoint.error === 'Token not issued for this endpoint');
 
   const verifyOnCorrectEndpoint = verifyMcpAccessToken(
     signedToken.token,
     'ep_github_333', // Verified against GitHub endpoint
     'https://mcp-gateway-hub-beta.vercel.app'
   );
-  assert('Test 11c: Token verified successfully on bound endpoint', verifyOnCorrectEndpoint.valid === true);
+  assert('Test 13c: Token verified successfully on bound endpoint', verifyOnCorrectEndpoint.valid === true);
 
-  // Test 12: Canonical resource parsing with extractEndpointIdFromResource
+  // Test 14: Refresh token endpoint binding produces endpoint-bound token
+  const refreshedTokenV = signMcpAccessToken({
+    userId: userA,
+    endpointId: epVercel.id,
+    clientId: 'client_gemini_shared',
+    reqOrigin: 'https://mcp-gateway-hub-beta.vercel.app',
+  });
+  const refreshedTokenN = signMcpAccessToken({
+    userId: userA,
+    endpointId: epNeon.id,
+    clientId: 'client_gemini_shared',
+    reqOrigin: 'https://mcp-gateway-hub-beta.vercel.app',
+  });
+  assert('Test 14a: Refreshing Vercel token produces Vercel-bound token', refreshedTokenV.payload.endpoint_id === 'ep_vercel_111');
+  assert('Test 14b: Refreshing Neon token produces Neon-bound token', refreshedTokenN.payload.endpoint_id === 'ep_neon_222');
+  assert('Test 14c: Refreshed Vercel token rejected on Neon endpoint', verifyMcpAccessToken(refreshedTokenV.token, 'ep_neon_222').valid === false);
+
+  // Test 15: Canonical resource parsing with extractEndpointIdFromResource
   const p1 = extractEndpointIdFromResource('https://mcp-gateway-hub-beta.vercel.app/api/mcp/823b5d78-5f36-4213-89fc-7edfc17e5fdf/http');
   const p2 = extractEndpointIdFromResource('/api/mcp/823b5d78-5f36-4213-89fc-7edfc17e5fdf');
   const p3 = extractEndpointIdFromResource('api/mcp/ep_neon_222/http');
   const p4 = extractEndpointIdFromResource('https://evil.com/api/other/123');
   const p5 = extractEndpointIdFromResource('/api/mcp/../traversal/attempt');
-  assert('Test 12a: Full canonical resource URL extracts endpoint ID', p1 === '823b5d78-5f36-4213-89fc-7edfc17e5fdf');
-  assert('Test 12b: Relative resource path extracts endpoint ID', p2 === '823b5d78-5f36-4213-89fc-7edfc17e5fdf');
-  assert('Test 12c: Path-only format extracts endpoint ID', p3 === 'ep_neon_222');
-  assert('Test 12d: Foreign path returns null', p4 === null);
-  assert('Test 12e: Path traversal injection returns null', p5 === null);
+  assert('Test 15a: Full canonical resource URL extracts endpoint ID', p1 === '823b5d78-5f36-4213-89fc-7edfc17e5fdf');
+  assert('Test 15b: Relative resource path extracts endpoint ID', p2 === '823b5d78-5f36-4213-89fc-7edfc17e5fdf');
+  assert('Test 15c: Path-only format extracts endpoint ID', p3 === 'ep_neon_222');
+  assert('Test 15d: Foreign path returns null', p4 === null);
+  assert('Test 15e: Path traversal injection returns null', p5 === null);
 
   // =========================================================================
   // 18. Serverless Multi-Instance MCP Session Resilience (Tests A-L)
