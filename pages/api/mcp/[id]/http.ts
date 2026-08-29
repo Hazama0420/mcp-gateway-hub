@@ -11,18 +11,35 @@ import { getMcpCorsHeaders, applyCorsHeaders } from '@/lib/security/cors';
 import { recordExecutionLog, recordSecurityEvent, generateExecutionId } from '@/lib/security/audit';
 import { isJwtToken, verifyMcpAccessToken } from '@/lib/oauth/jwt';
 import { getOAuthProtectedResourceMetadataUrl } from '@/lib/oauth/config';
+import { hashOpaqueToken } from '@/lib/oauth/store';
 
 import { registerTools as registerGithub } from '@/lib/adapters/github';
 import { registerTools as registerPostgres } from '@/lib/adapters/postgres';
 import { registerTools as registerVercel } from '@/lib/adapters/vercel';
 
-type SessionEntry = {
+export type SessionEntry = {
   transport: StreamableHTTPServerTransport;
   server: McpServer;
   endpointId: string;
+  userId?: string;
+  createdAt: number;
+  lastSeenAt: number;
 };
 
-const sessions = new Map<string, SessionEntry>();
+// Process-local session cache with TTL for warm Lambda instances
+export const sessions = new Map<string, SessionEntry>();
+const SESSION_TTL_MS = 2 * 60 * 60 * 1000; // 2 hours
+
+export function evictExpiredSessions(now: number = Date.now()): number {
+  let evicted = 0;
+  for (const [sid, entry] of sessions.entries()) {
+    if (now - entry.lastSeenAt > SESSION_TTL_MS) {
+      sessions.delete(sid);
+      evicted++;
+    }
+  }
+  return evicted;
+}
 
 export async function createMcpServer(endpoint: any, options?: { source?: 'MCP' | 'PLAYGROUND' }) {
   const source = options?.source || 'MCP';
@@ -300,26 +317,56 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   applyRateLimitHeaders(res, reqLimitResult);
 
   try {
+    evictExpiredSessions();
     const sessionId = req.headers['mcp-session-id'] as string | undefined;
 
-    if (sessionId) {
-      const existing = sessions.get(sessionId);
-      if (!existing || existing.endpointId !== id) {
-        return res.status(404).json({ error: 'Session not found or belongs to another endpoint' });
+    // 1. Explicit Session Deletion / Close
+    if (req.method === 'DELETE') {
+      if (sessionId && sessions.has(sessionId)) {
+        const existing = sessions.get(sessionId);
+        if (existing && existing.endpointId === id) {
+          sessions.delete(sessionId);
+          recordSecurityEvent({
+            eventType: 'SESSION_CLOSED',
+            endpointId: id as string,
+            userId: endpoint.user_id,
+            route: '/api/mcp/[id]/http',
+            ip: String(ip),
+            metadata: {
+              session_id_hash: hashOpaqueToken(sessionId).substring(0, 16),
+            },
+          });
+        }
       }
-      await existing.transport.handleRequest(req, res, req.body);
-      return;
+      return res.status(200).json({ status: 'session_closed' });
     }
 
+    // 2. Initialize Request: Establish MCP Session and generate Session ID
     if (req.method === 'POST' && isInitializeRequest(req.body)) {
       const server = await createMcpServer(endpoint);
-      let initializedSessionId: string | undefined;
+      const generatedSessionId = crypto.randomUUID();
 
       const transport = new StreamableHTTPServerTransport({
-        sessionIdGenerator: () => crypto.randomUUID(),
+        sessionIdGenerator: () => generatedSessionId,
         onsessioninitialized: (newSessionId) => {
-          initializedSessionId = newSessionId;
-          sessions.set(newSessionId, { transport, server, endpointId: id as string });
+          sessions.set(newSessionId, {
+            transport,
+            server,
+            endpointId: id as string,
+            userId: endpoint.user_id,
+            createdAt: Date.now(),
+            lastSeenAt: Date.now(),
+          });
+          recordSecurityEvent({
+            eventType: 'SESSION_CREATED',
+            endpointId: id as string,
+            userId: endpoint.user_id,
+            route: '/api/mcp/[id]/http',
+            ip: String(ip),
+            metadata: {
+              session_id_hash: hashOpaqueToken(newSessionId).substring(0, 16),
+            },
+          });
         },
         onsessionclosed: (closedSessionId) => {
           sessions.delete(closedSessionId);
@@ -331,7 +378,58 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return;
     }
 
-    return res.status(400).json({ error: 'Missing MCP session or initialize request' });
+    // 3. Warm Container Session Hit: If session exists in this Lambda instance's memory
+    if (sessionId) {
+      const existing = sessions.get(sessionId);
+      if (existing) {
+        // Enforce strict endpoint isolation
+        if (existing.endpointId !== id) {
+          recordSecurityEvent({
+            eventType: 'ACCESS_DENIED',
+            endpointId: id as string,
+            userId: endpoint.user_id,
+            route: '/api/mcp/[id]/http',
+            ip: String(ip),
+            reason: 'Session belongs to another endpoint',
+            metadata: {
+              session_endpoint_id: existing.endpointId,
+              request_endpoint_id: id as string,
+            },
+          });
+          return res.status(403).json({ error: 'Session belongs to another endpoint' });
+        }
+
+        existing.lastSeenAt = Date.now();
+        await existing.transport.handleRequest(req, res, req.body);
+        return;
+      }
+    }
+
+    // 4. Resilient Multi-Instance Serverless Handling for Subsequent Requests:
+    // When a request arrives at a fresh Lambda instance where local session memory is empty,
+    // or when operating in stateless mode with valid Bearer auth:
+    // Instantiate server + stateless transport to seamlessly process tools/list, tools/call, etc.
+    const server = await createMcpServer(endpoint);
+    const transport = new StreamableHTTPServerTransport({
+      sessionIdGenerator: undefined,
+    });
+
+    if (sessionId) {
+      recordSecurityEvent({
+        eventType: 'SESSION_REHYDRATED',
+        endpointId: id as string,
+        userId: endpoint.user_id,
+        route: '/api/mcp/[id]/http',
+        ip: String(ip),
+        metadata: {
+          session_id_hash: hashOpaqueToken(sessionId).substring(0, 16),
+        },
+      });
+    }
+
+    await server.connect(transport);
+    await transport.handleRequest(req, res, req.body);
+    return;
   } catch (error: any) {
     console.error('[HTTP] MCP error:', error);
     if (!res.headersSent) {
