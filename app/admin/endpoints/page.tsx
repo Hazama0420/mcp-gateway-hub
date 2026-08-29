@@ -21,6 +21,8 @@ import {
   Power,
   RotateCcw,
   Sparkles,
+  Lock,
+  GitBranch,
 } from 'lucide-react';
 import { AppShell } from '@/components/AppShell';
 import { Button } from '@/components/ui/button';
@@ -30,6 +32,7 @@ import { EmptyState } from '@/components/ui/empty-state';
 import { StatusBadge } from '@/components/ui/status-badge';
 import { CreateEndpointModal } from '@/components/CreateEndpointModal';
 import { ClientConfigModal } from '@/components/ui/client-config-modal';
+import { EndpointOAuthModal } from '@/components/ui/endpoint-oauth-modal';
 import {
   Dialog,
   DialogContent,
@@ -38,15 +41,6 @@ import {
   DialogDescription,
   DialogFooter,
 } from '@/components/ui/dialog';
-
-function GithubIcon(props: React.SVGProps<SVGSVGElement>) {
-  return (
-    <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round" {...props}>
-      <path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4" />
-      <path d="M9 18c-4.51 2-5-2-7-2" />
-    </svg>
-  );
-}
 
 interface EndpointService {
   id?: string;
@@ -68,6 +62,7 @@ export default function EndpointsPage() {
 
   const [isCreateOpen, setIsCreateOpen] = React.useState(false);
   const [configModalEndpoint, setConfigModalEndpoint] = React.useState<Endpoint | null>(null);
+  const [oauthModalEndpoint, setOauthModalEndpoint] = React.useState<Endpoint | null>(null);
   const [deleteCandidate, setDeleteCandidate] = React.useState<Endpoint | null>(null);
   const [deleting, setDeleting] = React.useState(false);
   const [togglingId, setTogglingId] = React.useState<string | null>(null);
@@ -98,26 +93,25 @@ export default function EndpointsPage() {
       setCopiedId(id);
       setTimeout(() => setCopiedId(null), 2000);
     } catch (err) {
-      console.error('Failed to copy: ', err);
+      console.error('Failed to copy text:', err);
     }
   };
 
-  const handleToggleActive = async (endpoint: Endpoint) => {
+  const handleToggleActive = async (ep: Endpoint) => {
     try {
-      setTogglingId(endpoint.id);
-      const newStatus = !endpoint.is_active;
+      setTogglingId(ep.id);
       const res = await fetch('/api/endpoints', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: endpoint.id, is_active: newStatus }),
+        body: JSON.stringify({ id: ep.id, is_active: !ep.is_active }),
       });
       if (res.ok) {
         setEndpoints((prev) =>
-          prev.map((e) => (e.id === endpoint.id ? { ...e, is_active: newStatus } : e))
+          prev.map((item) => (item.id === ep.id ? { ...item, is_active: !item.is_active } : item))
         );
       }
     } catch (e) {
-      console.error('Toggle error:', e);
+      console.error('Failed to toggle endpoint status:', e);
     } finally {
       setTogglingId(null);
     }
@@ -131,11 +125,11 @@ export default function EndpointsPage() {
         method: 'DELETE',
       });
       if (res.ok) {
-        setEndpoints((prev) => prev.filter((e) => e.id !== deleteCandidate.id));
+        setEndpoints((prev) => prev.filter((item) => item.id !== deleteCandidate.id));
         setDeleteCandidate(null);
       }
     } catch (e) {
-      console.error('Delete error:', e);
+      console.error('Failed to delete endpoint:', e);
     } finally {
       setDeleting(false);
     }
@@ -144,7 +138,8 @@ export default function EndpointsPage() {
   const origin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000';
 
   const filteredEndpoints = endpoints.filter((ep) => {
-    const q = searchQuery.toLowerCase();
+    const q = searchQuery.toLowerCase().trim();
+    if (!q) return true;
     return (
       ep.name.toLowerCase().includes(q) ||
       ep.id.toLowerCase().includes(q) ||
@@ -156,30 +151,36 @@ export default function EndpointsPage() {
     switch (type.toLowerCase()) {
       case 'github':
         return (
-          <span className="pop-badge bg-slate-200 dark:bg-slate-800 text-slate-950 dark:text-slate-100 gap-1">
-            <GithubIcon className="h-3 w-3" />
+          <span className="pop-badge bg-violet-100 dark:bg-violet-950 text-violet-800 dark:text-violet-200 border border-[var(--color-border)] gap-1 text-[10px] font-mono font-bold">
+            <GitBranch className="h-3 w-3 stroke-[2.5]" />
             GitHub
           </span>
         );
       case 'postgres':
       case 'postgresql':
+        return (
+          <span className="pop-badge bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-200 border border-[var(--color-border)] gap-1 text-[10px] font-mono font-bold">
+            <Database className="h-3 w-3 stroke-[2.5]" />
+            PostgreSQL
+          </span>
+        );
       case 'supabase':
         return (
-          <span className="pop-badge bg-sky-200 dark:bg-sky-900 text-sky-950 dark:text-sky-100 gap-1">
+          <span className="pop-badge bg-teal-100 dark:bg-teal-950 text-teal-800 dark:text-teal-200 border border-[var(--color-border)] gap-1 text-[10px] font-mono font-bold">
             <Database className="h-3 w-3 stroke-[2.5]" />
-            Postgres
+            Supabase
           </span>
         );
       case 'vercel':
         return (
-          <span className="pop-badge bg-violet-200 dark:bg-violet-900 text-violet-950 dark:text-violet-100 gap-1">
+          <span className="pop-badge bg-sky-100 dark:bg-sky-950 text-sky-800 dark:text-sky-200 border border-[var(--color-border)] gap-1 text-[10px] font-mono font-bold">
             <Globe2 className="h-3 w-3 stroke-[2.5]" />
             Vercel
           </span>
         );
       default:
         return (
-          <span className="pop-badge bg-amber-200 dark:bg-amber-900 text-amber-950 dark:text-amber-100 gap-1">
+          <span className="pop-badge bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-200 border border-[var(--color-border)] gap-1 text-[10px] font-mono font-bold">
             <Server className="h-3 w-3 stroke-[2.5]" />
             {type}
           </span>
@@ -339,13 +340,21 @@ export default function EndpointsPage() {
                     </div>
                   </div>
 
-                  {/* MCP Authentication Status */}
-                  <div className="flex items-center justify-between text-[11px] font-mono font-bold bg-[var(--color-surface-elevated)] p-2 rounded-xl border border-[var(--color-border)]">
-                    <span className="text-[var(--color-text-muted)] uppercase text-[10px]">MCP Auth:</span>
-                    <div className="flex items-center gap-3 text-[10px]">
-                      <span className="text-emerald-600 dark:text-emerald-400">OAuth 2.1 ● Available</span>
-                      <span className="text-sky-600 dark:text-sky-400">API Key ● Available</span>
+                  {/* MCP Authentication Status & OAuth Button */}
+                  <div className="flex items-center justify-between text-[11px] font-mono font-bold bg-[var(--color-surface-elevated)] p-2.5 rounded-xl border border-[var(--color-border)]">
+                    <div className="flex items-center gap-2">
+                      <span className="text-[var(--color-text-muted)] uppercase text-[10px]">Auth:</span>
+                      <span className="text-emerald-600 dark:text-emerald-400">OAuth 2.1 ● Active</span>
                     </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setOauthModalEndpoint(ep)}
+                      className="pop-btn h-7 px-2 text-[10px] bg-amber-400 text-slate-950 hover:bg-amber-300 font-black gap-1"
+                    >
+                      <Lock className="h-3 w-3 stroke-[2.5]" />
+                      <span>Manage OAuth</span>
+                    </Button>
                   </div>
 
                   {/* Streamable HTTP URL Copy Row */}
@@ -453,11 +462,21 @@ export default function EndpointsPage() {
         open={isCreateOpen}
         onOpenChange={setIsCreateOpen}
         onSuccess={fetchEndpoints}
+        onOpenPlayground={(id) => {
+          window.location.href = `/admin/playground?endpoint=${id}`;
+        }}
+        onOpenClientConfig={(ep) => setConfigModalEndpoint(ep)}
+        onOpenOAuthModal={(ep) => setOauthModalEndpoint(ep)}
       />
       <ClientConfigModal
         open={Boolean(configModalEndpoint)}
         onOpenChange={(open) => !open && setConfigModalEndpoint(null)}
         endpoint={configModalEndpoint}
+      />
+      <EndpointOAuthModal
+        open={Boolean(oauthModalEndpoint)}
+        onOpenChange={(open) => !open && setOauthModalEndpoint(null)}
+        endpoint={oauthModalEndpoint}
       />
     </AppShell>
   );

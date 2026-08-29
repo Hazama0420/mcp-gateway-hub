@@ -96,8 +96,26 @@ export async function POST(req: Request) {
     return res;
   }
 
+  // Check if client is active
+  if (!client.is_active) {
+    recordSecurityEvent({
+      eventType: 'AUTH_FAILED',
+      route: '/oauth/token',
+      ip,
+      reason: 'OAuth client has been revoked',
+      metadata: { client_id: clientId },
+    });
+    const res = NextResponse.json(
+      { error: 'invalid_client', error_description: 'OAuth client has been revoked' },
+      { status: 401, headers: { 'Cache-Control': 'no-store', 'Pragma': 'no-cache', 'Access-Control-Allow-Origin': '*' } }
+    );
+    applyRateLimitHeaders(res, rateLimitResult);
+    return res;
+  }
+
   // If confidential client, verify client_secret
-  if (client.token_endpoint_auth_method === 'client_secret_post') {
+  const isConfidential = client.client_secret_hash !== null || client.token_endpoint_auth_method !== 'none';
+  if (isConfidential) {
     if (!clientSecret || !client.client_secret_hash) {
       const res = NextResponse.json(
         { error: 'invalid_client', error_description: 'Client secret is required for confidential clients' },

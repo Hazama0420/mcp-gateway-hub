@@ -26,6 +26,7 @@ model User {
   logs         ExecutionLog[]
   oauth_codes  OAuthAuthorizationCode[]
   oauth_refresh_tokens OAuthRefreshToken[]
+  oauth_clients OAuthClient[]
 }
 
 // ============================================
@@ -45,6 +46,7 @@ model McpEndpoint {
   integrations EndpointIntegration[]
   oauth_codes  OAuthAuthorizationCode[]
   oauth_refresh_tokens OAuthRefreshToken[]
+  oauth_clients OAuthClient[]
 }
 
 // ============================================
@@ -232,12 +234,13 @@ model OAuthClient {
   client_id                  String    @unique
   client_secret_hash         String?
   client_name                String?
+  client_type                String    @default("confidential") // "confidential" or "public"
   client_uri                 String?
   logo_uri                   String?
   redirect_uris              String[]  // Registered redirect URIs
   grant_types                String[]  @default(["authorization_code", "refresh_token"])
   response_types             String[]  @default(["code"])
-  token_endpoint_auth_method String    @default("none") // "none" for public, "client_secret_post"
+  token_endpoint_auth_method String    @default("client_secret_post") // "none" for public, "client_secret_post", "client_secret_basic"
   scope                      String?
   contacts                   String[]  @default([])
   tos_uri                    String?
@@ -246,13 +249,21 @@ model OAuthClient {
   software_id                String?
   software_version           String?
   client_secret_expires_at   DateTime?
+  endpoint_id                String?
+  user_id                    String?
+  is_active                  Boolean   @default(true)
   created_at                 DateTime  @default(now())
   updated_at                 DateTime  @updatedAt
 
+  endpoint       McpEndpoint?             @relation(fields: [endpoint_id], references: [id], onDelete: Cascade)
+  user           User?                    @relation(fields: [user_id], references: [id], onDelete: Cascade)
   codes          OAuthAuthorizationCode[]
   refresh_tokens OAuthRefreshToken[]
 
   @@index([client_id])
+  @@index([endpoint_id])
+  @@index([user_id])
+  @@index([is_active])
 }
 
 // ============================================

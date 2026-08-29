@@ -20,7 +20,7 @@ export const SUPPORTED_SCOPES = ['mcp:read', 'mcp:write'];
 export const SUPPORTED_RESPONSE_TYPES = ['code'];
 export const SUPPORTED_GRANT_TYPES = ['authorization_code', 'refresh_token'];
 export const SUPPORTED_CODE_CHALLENGE_METHODS = ['S256'];
-export const SUPPORTED_TOKEN_AUTH_METHODS = ['client_secret_post', 'none'];
+export const SUPPORTED_TOKEN_AUTH_METHODS = ['client_secret_post', 'client_secret_basic', 'none'];
 
 /**
  * Resolves the stable canonical issuer URL for the authorization server.

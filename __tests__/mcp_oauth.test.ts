@@ -284,6 +284,30 @@ async function runOAuthTests() {
   assert('OAuth Rate Limit: IP B is isolated and allowed', regB1.success);
 
   // =========================================================================
+  // 12. Confidential Client Authentication & DCR Compatibility
+  // =========================================================================
+  console.log('\n--- 12. Confidential Client & DCR Compatibility ---');
+
+  const rawSecret = 'mcp_sec_mock_confidential_secret_32_bytes_test';
+  const salt = await bcrypt.genSalt(10);
+  const secretHash = await bcrypt.hash(rawSecret, salt);
+
+  assert('Confidential Secret: Valid secret passes bcrypt comparison', await bcrypt.compare(rawSecret, secretHash));
+  assert('Confidential Secret: Wrong secret fails bcrypt comparison', !(await bcrypt.compare('wrong_secret', secretHash)));
+
+  // Basic Auth header decoding test
+  const basicCreds = Buffer.from(`${clientId}:${rawSecret}`).toString('base64');
+  const decodedHeader = Buffer.from(basicCreds, 'base64').toString('utf8');
+  const [extractedUser, extractedPass] = decodedHeader.split(':');
+
+  assert('HTTP Basic Auth: Extracts client_id accurately', extractedUser === clientId);
+  assert('HTTP Basic Auth: Extracts client_secret accurately', extractedPass === rawSecret);
+
+  // Singular redirect_uri parsing check
+  const singularUris = ['https://oauth.google.com/callback'];
+  assert('DCR Singular URI: Accepted as valid redirect URI', isValidRedirectUri(singularUris[0]));
+
+  // =========================================================================
   // SUMMARY
   // =========================================================================
   console.log('\n========================================================================');

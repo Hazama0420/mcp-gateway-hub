@@ -103,7 +103,8 @@ export function hashOpaqueToken(token: string): string {
 
 export interface RegisterClientInput {
   client_name?: string;
-  redirect_uris: string[];
+  redirect_uris?: string[];
+  redirect_uri?: string;
   grant_types?: string[];
   response_types?: string[];
   token_endpoint_auth_method?: string;
@@ -116,47 +117,62 @@ export interface RegisterClientInput {
   jwks_uri?: string;
   software_id?: string;
   software_version?: string;
+  endpoint_id?: string;
+  user_id?: string;
 }
 
 /**
  * Dynamic Client Registration (RFC 7591).
+ * Default auth method is confidential (client_secret_post/client_secret_basic) per RFC 7591 §2
+ * unless explicitly requested as 'none'.
  */
 export async function registerOAuthClient(input: RegisterClientInput) {
   const prisma = getPrismaClient();
-  if (!Array.isArray(input.redirect_uris) || input.redirect_uris.length === 0) {
+
+  // Accept either redirect_uris array or singular redirect_uri
+  const uris = Array.isArray(input.redirect_uris) && input.redirect_uris.length > 0
+    ? input.redirect_uris
+    : input.redirect_uri
+    ? [input.redirect_uri]
+    : [];
+
+  if (uris.length === 0) {
     throw new Error('redirect_uris must be a non-empty array of valid URLs');
   }
 
-  for (const uri of input.redirect_uris) {
+  for (const uri of uris) {
     if (!isValidRedirectUri(uri)) {
       throw new Error(`Invalid or unsafe redirect_uri: ${uri}`);
     }
   }
 
   const clientId = `mcp_client_${crypto.randomUUID()}`;
-  const isPublic = input.token_endpoint_auth_method === 'none' || !input.token_endpoint_auth_method;
+  const isExplicitPublic = input.token_endpoint_auth_method === 'none';
+  const authMethod = isExplicitPublic
+    ? 'none'
+    : input.token_endpoint_auth_method || 'client_secret_post';
+
   let rawClientSecret: string | undefined;
   let clientSecretHash: string | undefined;
-  let clientSecretExpiresAt: Date | undefined;
 
-  if (!isPublic) {
+  if (!isExplicitPublic) {
     rawClientSecret = `mcp_sec_${crypto.randomBytes(32).toString('hex')}`;
     const salt = await bcrypt.genSalt(10);
     clientSecretHash = await bcrypt.hash(rawClientSecret, salt);
-    clientSecretExpiresAt = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000); // 1 year
   }
 
   const client = await prisma.oAuthClient.create({
     data: {
       client_id: clientId,
       client_secret_hash: clientSecretHash || null,
-      client_name: input.client_name || 'MCP Client',
+      client_name: input.client_name || 'Gemini Spark MCP Client',
+      client_type: isExplicitPublic ? 'public' : 'confidential',
       client_uri: input.client_uri || null,
       logo_uri: input.logo_uri || null,
-      redirect_uris: input.redirect_uris,
+      redirect_uris: uris,
       grant_types: input.grant_types || ['authorization_code', 'refresh_token'],
       response_types: input.response_types || ['code'],
-      token_endpoint_auth_method: isPublic ? 'none' : 'client_secret_post',
+      token_endpoint_auth_method: authMethod,
       scope: input.scope || 'mcp:read mcp:write',
       contacts: input.contacts || [],
       tos_uri: input.tos_uri || null,
@@ -164,17 +180,17 @@ export async function registerOAuthClient(input: RegisterClientInput) {
       jwks_uri: input.jwks_uri || null,
       software_id: input.software_id || null,
       software_version: input.software_version || null,
-      client_secret_expires_at: clientSecretExpiresAt || null,
+      endpoint_id: input.endpoint_id || null,
+      user_id: input.user_id || null,
+      is_active: true,
     },
   });
 
   return {
     client_id: client.client_id,
-    client_secret: rawClientSecret,
+    ...(rawClientSecret ? { client_secret: rawClientSecret } : {}),
     client_id_issued_at: Math.floor(client.created_at.getTime() / 1000),
-    client_secret_expires_at: clientSecretExpiresAt
-      ? Math.floor(clientSecretExpiresAt.getTime() / 1000)
-      : undefined,
+    client_secret_expires_at: 0, // 0 = never expires per RFC 7591 §3.2.1
     client_name: client.client_name,
     redirect_uris: client.redirect_uris,
     grant_types: client.grant_types,
@@ -182,6 +198,141 @@ export async function registerOAuthClient(input: RegisterClientInput) {
     token_endpoint_auth_method: client.token_endpoint_auth_method,
     scope: client.scope,
   };
+}
+
+/**
+ * Creates an endpoint-bound OAuth client manually via Dashboard UI.
+ * Returns the plaintext client secret ONCE upon creation.
+ */
+export async function createEndpointOAuthClient(params: {
+  endpointId: string;
+  userId: string;
+  clientName: string;
+  clientType?: 'confidential' | 'public';
+  redirectUris?: string[];
+  scope?: string;
+}) {
+  const prisma = getPrismaClient();
+
+  const endpoint = await prisma.mcpEndpoint.findFirst({
+    where: { id: params.endpointId, user_id: params.userId },
+  });
+
+  if (!endpoint) {
+    throw new Error('Endpoint not found or unauthorized');
+  }
+
+  const uris = params.redirectUris && params.redirectUris.length > 0
+    ? params.redirectUris
+    : ['https://oauth.google.com/callback', 'http://127.0.0.1:8080/callback'];
+
+  for (const uri of uris) {
+    if (!isValidRedirectUri(uri)) {
+      throw new Error(`Invalid redirect_uri: ${uri}`);
+    }
+  }
+
+  const isPublic = params.clientType === 'public';
+  const clientId = `mcp_client_${crypto.randomUUID()}`;
+  let rawClientSecret: string | undefined;
+  let clientSecretHash: string | undefined;
+
+  if (!isPublic) {
+    rawClientSecret = `mcp_sec_${crypto.randomBytes(32).toString('hex')}`;
+    const salt = await bcrypt.genSalt(10);
+    clientSecretHash = await bcrypt.hash(rawClientSecret, salt);
+  }
+
+  const client = await prisma.oAuthClient.create({
+    data: {
+      client_id: clientId,
+      client_secret_hash: clientSecretHash || null,
+      client_name: params.clientName || 'Gemini Spark',
+      client_type: isPublic ? 'public' : 'confidential',
+      redirect_uris: uris,
+      grant_types: ['authorization_code', 'refresh_token'],
+      response_types: ['code'],
+      token_endpoint_auth_method: isPublic ? 'none' : 'client_secret_post',
+      scope: params.scope || 'mcp:read mcp:write',
+      endpoint_id: params.endpointId,
+      user_id: params.userId,
+      is_active: true,
+    },
+  });
+
+  return {
+    client_id: client.client_id,
+    client_secret: rawClientSecret,
+    client_name: client.client_name,
+    client_type: client.client_type,
+    token_endpoint_auth_method: client.token_endpoint_auth_method,
+    redirect_uris: client.redirect_uris,
+    scope: client.scope,
+    created_at: client.created_at,
+    is_active: client.is_active,
+  };
+}
+
+/**
+ * Lists all OAuth clients configured for a specific endpoint and user.
+ * Sanitizes and strips hashes/secrets.
+ */
+export async function listEndpointOAuthClients(endpointId: string, userId: string) {
+  const prisma = getPrismaClient();
+
+  const clients = await prisma.oAuthClient.findMany({
+    where: {
+      endpoint_id: endpointId,
+      user_id: userId,
+    },
+    select: {
+      id: true,
+      client_id: true,
+      client_name: true,
+      client_type: true,
+      token_endpoint_auth_method: true,
+      redirect_uris: true,
+      scope: true,
+      is_active: true,
+      created_at: true,
+      updated_at: true,
+    },
+    orderBy: { created_at: 'desc' },
+  });
+
+  return clients;
+}
+
+/**
+ * Revokes an OAuth client for an endpoint.
+ */
+export async function revokeEndpointOAuthClient(clientId: string, endpointId: string, userId: string) {
+  const prisma = getPrismaClient();
+
+  const client = await prisma.oAuthClient.findFirst({
+    where: {
+      client_id: clientId,
+      endpoint_id: endpointId,
+      user_id: userId,
+    },
+  });
+
+  if (!client) {
+    throw new Error('OAuth client not found or unauthorized');
+  }
+
+  await prisma.oAuthClient.update({
+    where: { id: client.id },
+    data: { is_active: false },
+  });
+
+  // Revoke any active refresh tokens for this client
+  await prisma.oAuthRefreshToken.updateMany({
+    where: { client_id: clientId, revoked_at: null },
+    data: { revoked_at: new Date() },
+  });
+
+  return { success: true, client_id: clientId, is_active: false };
 }
 
 /**
@@ -243,6 +394,11 @@ export async function consumeAuthorizationCode(params: {
 
   if (!codeRecord) {
     return { valid: false, error: 'invalid_grant', error_description: 'Authorization code not found or invalid' };
+  }
+
+  // Check client is active
+  if (!codeRecord.client.is_active) {
+    return { valid: false, error: 'invalid_client', error_description: 'OAuth client has been revoked' };
   }
 
   // Check single-use
@@ -357,11 +513,15 @@ export async function refreshOAuthToken(params: {
 
   const rtRecord = await prisma.oAuthRefreshToken.findUnique({
     where: { token_hash: rtHash },
-    include: { endpoint: true },
+    include: { endpoint: true, client: true },
   });
 
   if (!rtRecord) {
     return { valid: false, error: 'invalid_grant', error_description: 'Refresh token not found' };
+  }
+
+  if (rtRecord.client && !rtRecord.client.is_active) {
+    return { valid: false, error: 'invalid_client', error_description: 'OAuth client has been revoked' };
   }
 
   if (rtRecord.revoked_at) {
