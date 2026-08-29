@@ -50,11 +50,18 @@ export async function middleware(request: NextRequest) {
     }
   }
 
-  // 3. Bebaskan rute publik (auth, login, health)
+  // 3. Bebaskan rute publik (auth, login, health, discovery, OAuth 2.1)
   if (
     path.startsWith('/api/auth') || 
     path.startsWith('/login') ||
-    path.startsWith('/api/health')
+    path.startsWith('/api/health') ||
+    path.startsWith('/.well-known') ||
+    path.startsWith('/oauth') ||
+    path.startsWith('/authorize') ||
+    path.startsWith('/register') ||
+    path.startsWith('/token') ||
+    path.startsWith('/revoke') ||
+    path.startsWith('/api/oauth')
   ) {
     return response;
   }

@@ -254,6 +254,21 @@ export default function HealthPage() {
                 <StatusBadge status="SUCCESS" size="sm" />
               </div>
             </div>
+
+            {/* OAuth 2.1 / Gemini Spark Auth Row */}
+            <div className="flex items-center justify-between p-3.5 rounded-xl bg-[var(--color-surface-elevated)] border-2 border-[var(--color-border)] shadow-[2px_2px_0px_0px_rgba(15,23,42,1)]">
+              <div className="flex items-center gap-2.5">
+                <Lock className="h-4 w-4 stroke-[2.5] text-indigo-600 dark:text-indigo-400" />
+                <div>
+                  <div className="font-black text-[var(--color-text-primary)]">OAuth 2.1 & RFC 9728 PRM</div>
+                  <div className="text-[10px] text-[var(--color-text-muted)] font-medium">Gemini Spark & Remote MCP</div>
+                </div>
+              </div>
+              <div className="flex items-center gap-3">
+                <span className="text-[11px] font-bold text-[var(--color-text-secondary)]">Enforced</span>
+                <StatusBadge status="SUCCESS" size="sm" />
+              </div>
+            </div>
           </CardContent>
         </Card>
 
@@ -262,7 +277,7 @@ export default function HealthPage() {
           <CardHeader className="p-5 pb-3">
             <CardTitle className="text-sm font-black flex items-center gap-2 font-mono">
               <ShieldCheck className="h-4 w-4 stroke-[2.5]" />
-              <span>Security Baseline (P0.1 – P2.3)</span>
+              <span>Security Baseline (P0.1 – P2.4)</span>
             </CardTitle>
             <CardDescription className="text-xs font-medium text-[var(--color-text-secondary)]">
               Verified security perimeter active across all gateway routes.
@@ -277,6 +292,7 @@ export default function HealthPage() {
               { code: 'P1.2', name: 'Rate Limiting', desc: 'sliding window pre-auth & per-endpoint' },
               { code: 'P1.4', name: 'Credential Encryption', desc: 'AES-256-GCM cipher' },
               { code: 'P2.2', name: 'Audit Logging', desc: 'non-blocking execution audit' },
+              { code: 'P2.4', name: 'OAuth 2.1 Interop', desc: 'RFC 9728 & Gemini Spark PKCE' },
             ].map((item) => (
               <div
                 key={item.code}

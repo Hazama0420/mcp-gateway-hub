@@ -33,7 +33,14 @@ export type SecurityEventType =
   | 'ACCESS_DENIED'
   | 'RATE_LIMITED'
   | 'SSRF_BLOCKED'
-  | 'TENANT_ACCESS_DENIED';
+  | 'TENANT_ACCESS_DENIED'
+  | 'OAUTH_CLIENT_REGISTERED'
+  | 'OAUTH_AUTHORIZATION_STARTED'
+  | 'OAUTH_AUTHORIZATION_DENIED'
+  | 'OAUTH_TOKEN_ISSUED'
+  | 'OAUTH_TOKEN_REFRESHED'
+  | 'OAUTH_TOKEN_REJECTED'
+  | 'OAUTH_SCOPE_DENIED';
 
 let prismaInstance: any = null;
 
@@ -106,10 +113,13 @@ export function sanitizeAuditMetadata(data: any, depth = 0): any {
         lowerKey.includes('cred') ||
         lowerKey.includes('cookie') ||
         lowerKey.includes('key') ||
+        lowerKey.includes('verifier') ||
+        lowerKey.includes('challenge') ||
         lowerKey === 'sql' ||
         lowerKey === 'query' ||
         lowerKey === 'body' ||
-        lowerKey === 'headers'
+        lowerKey === 'headers' ||
+        lowerKey === 'code'
       ) {
         clean[key] = '[REDACTED]';
       } else {
@@ -182,6 +192,7 @@ export async function recordSecurityEvent(params: {
 
     switch (params.eventType) {
       case 'AUTH_FAILED':
+      case 'OAUTH_TOKEN_REJECTED':
         errorCategory = 'AUTHENTICATION';
         status = 'AUTH_FAILED';
         break;
@@ -195,10 +206,16 @@ export async function recordSecurityEvent(params: {
         break;
       case 'ACCESS_DENIED':
       case 'TENANT_ACCESS_DENIED':
+      case 'OAUTH_AUTHORIZATION_DENIED':
+      case 'OAUTH_SCOPE_DENIED':
         errorCategory = 'AUTHORIZATION';
         status = 'BLOCKED';
         break;
       case 'AUTH_SUCCESS':
+      case 'OAUTH_CLIENT_REGISTERED':
+      case 'OAUTH_AUTHORIZATION_STARTED':
+      case 'OAUTH_TOKEN_ISSUED':
+      case 'OAUTH_TOKEN_REFRESHED':
         errorCategory = 'AUTHENTICATION';
         status = 'SUCCESS';
         break;

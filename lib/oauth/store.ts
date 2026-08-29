@@ -1,0 +1,416 @@
+// lib/oauth/store.ts
+import * as crypto from 'node:crypto';
+import bcrypt from 'bcryptjs';
+
+let prismaInstance: any = null;
+
+function getPrismaClient() {
+  if (!prismaInstance) {
+    try {
+      const mod = require('../prisma');
+      prismaInstance = mod.default || mod.prisma || mod;
+    } catch {
+      try {
+        const { PrismaClient } = require('@prisma/client');
+        prismaInstance = new PrismaClient();
+      } catch {
+        prismaInstance = null;
+      }
+    }
+  }
+  return prismaInstance;
+}
+
+function getPkceHelper() {
+  try {
+    return require('./pkce');
+  } catch {
+    return null;
+  }
+}
+
+function getJwtHelper() {
+  try {
+    return require('./jwt');
+  } catch {
+    return null;
+  }
+}
+
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
+
+/**
+ * Validates a requested redirect_uri against a registered one per RFC 8252 §7.3.
+ * For loopback hosts (localhost, 127.0.0.1, [::1]), any port is allowed for ephemeral native apps.
+ * For all other hosts, exact matching is strictly required.
+ */
+export function redirectUriMatches(requested: string, registered: string): boolean {
+  if (requested === registered) {
+    return true;
+  }
+
+  let reqUrl: URL;
+  let regUrl: URL;
+
+  try {
+    reqUrl = new URL(requested);
+    regUrl = new URL(registered);
+  } catch {
+    return false;
+  }
+
+  // Reject unsafe schemes
+  if (reqUrl.protocol === 'javascript:' || reqUrl.protocol === 'data:') {
+    return false;
+  }
+
+  // Port relaxation applies only if BOTH target loopback host
+  if (LOOPBACK_HOSTS.has(reqUrl.hostname) && LOOPBACK_HOSTS.has(regUrl.hostname)) {
+    return (
+      reqUrl.protocol === regUrl.protocol &&
+      reqUrl.hostname === regUrl.hostname &&
+      reqUrl.pathname === regUrl.pathname &&
+      reqUrl.search === regUrl.search
+    );
+  }
+
+  // Exact matching for non-loopback
+  return requested === registered;
+}
+
+/**
+ * Validates if a redirect URI syntax is safe (no javascript:, data:, wildcards).
+ */
+export function isValidRedirectUri(uri: string): boolean {
+  try {
+    const parsed = new URL(uri);
+    if (parsed.protocol === 'javascript:' || parsed.protocol === 'data:') {
+      return false;
+    }
+    if (!parsed.protocol) return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Hashes an opaque token or authorization code with SHA-256 for secure DB persistence.
+ */
+export function hashOpaqueToken(token: string): string {
+  return crypto.createHash('sha256').update(token, 'utf8').digest('hex');
+}
+
+export interface RegisterClientInput {
+  client_name?: string;
+  redirect_uris: string[];
+  grant_types?: string[];
+  response_types?: string[];
+  token_endpoint_auth_method?: string;
+  scope?: string;
+  contacts?: string[];
+  client_uri?: string;
+  logo_uri?: string;
+  tos_uri?: string;
+  policy_uri?: string;
+  jwks_uri?: string;
+  software_id?: string;
+  software_version?: string;
+}
+
+/**
+ * Dynamic Client Registration (RFC 7591).
+ */
+export async function registerOAuthClient(input: RegisterClientInput) {
+  const prisma = getPrismaClient();
+  if (!Array.isArray(input.redirect_uris) || input.redirect_uris.length === 0) {
+    throw new Error('redirect_uris must be a non-empty array of valid URLs');
+  }
+
+  for (const uri of input.redirect_uris) {
+    if (!isValidRedirectUri(uri)) {
+      throw new Error(`Invalid or unsafe redirect_uri: ${uri}`);
+    }
+  }
+
+  const clientId = `mcp_client_${crypto.randomUUID()}`;
+  const isPublic = input.token_endpoint_auth_method === 'none' || !input.token_endpoint_auth_method;
+  let rawClientSecret: string | undefined;
+  let clientSecretHash: string | undefined;
+  let clientSecretExpiresAt: Date | undefined;
+
+  if (!isPublic) {
+    rawClientSecret = `mcp_sec_${crypto.randomBytes(32).toString('hex')}`;
+    const salt = await bcrypt.genSalt(10);
+    clientSecretHash = await bcrypt.hash(rawClientSecret, salt);
+    clientSecretExpiresAt = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000); // 1 year
+  }
+
+  const client = await prisma.oAuthClient.create({
+    data: {
+      client_id: clientId,
+      client_secret_hash: clientSecretHash || null,
+      client_name: input.client_name || 'MCP Client',
+      client_uri: input.client_uri || null,
+      logo_uri: input.logo_uri || null,
+      redirect_uris: input.redirect_uris,
+      grant_types: input.grant_types || ['authorization_code', 'refresh_token'],
+      response_types: input.response_types || ['code'],
+      token_endpoint_auth_method: isPublic ? 'none' : 'client_secret_post',
+      scope: input.scope || 'mcp:read mcp:write',
+      contacts: input.contacts || [],
+      tos_uri: input.tos_uri || null,
+      policy_uri: input.policy_uri || null,
+      jwks_uri: input.jwks_uri || null,
+      software_id: input.software_id || null,
+      software_version: input.software_version || null,
+      client_secret_expires_at: clientSecretExpiresAt || null,
+    },
+  });
+
+  return {
+    client_id: client.client_id,
+    client_secret: rawClientSecret,
+    client_id_issued_at: Math.floor(client.created_at.getTime() / 1000),
+    client_secret_expires_at: clientSecretExpiresAt
+      ? Math.floor(clientSecretExpiresAt.getTime() / 1000)
+      : undefined,
+    client_name: client.client_name,
+    redirect_uris: client.redirect_uris,
+    grant_types: client.grant_types,
+    response_types: client.response_types,
+    token_endpoint_auth_method: client.token_endpoint_auth_method,
+    scope: client.scope,
+  };
+}
+
+/**
+ * Creates and stores a single-use authorization code bound to PKCE S256 challenge.
+ */
+export async function createAuthorizationCode(params: {
+  clientId: string;
+  userId: string;
+  endpointId: string;
+  redirectUri: string;
+  codeChallenge: string;
+  codeChallengeMethod?: string;
+  scope?: string;
+  resource?: string;
+  expiresInSeconds?: number;
+}): Promise<string> {
+  const prisma = getPrismaClient();
+  const rawCode = `mcp_code_${crypto.randomBytes(32).toString('hex')}`;
+  const codeHash = hashOpaqueToken(rawCode);
+  const expiresIn = params.expiresInSeconds || 300; // 5 minutes
+  const expiresAt = new Date(Date.now() + expiresIn * 1000);
+
+  await prisma.oAuthAuthorizationCode.create({
+    data: {
+      code_hash: codeHash,
+      client_id: params.clientId,
+      user_id: params.userId,
+      endpoint_id: params.endpointId,
+      redirect_uri: params.redirectUri,
+      code_challenge: params.codeChallenge,
+      code_challenge_method: params.codeChallengeMethod || 'S256',
+      scope: params.scope || 'mcp:read mcp:write',
+      resource: params.resource || null,
+      expires_at: expiresAt,
+    },
+  });
+
+  return rawCode;
+}
+
+/**
+ * Validates and atomically consumes a single-use authorization code.
+ */
+export async function consumeAuthorizationCode(params: {
+  clientId: string;
+  code: string;
+  codeVerifier: string;
+  redirectUri?: string;
+  resource?: string;
+}) {
+  const prisma = getPrismaClient();
+  const pkceHelper = getPkceHelper();
+  const codeHash = hashOpaqueToken(params.code);
+
+  const codeRecord = await prisma.oAuthAuthorizationCode.findUnique({
+    where: { code_hash: codeHash },
+    include: { client: true, user: true, endpoint: true },
+  });
+
+  if (!codeRecord) {
+    return { valid: false, error: 'invalid_grant', error_description: 'Authorization code not found or invalid' };
+  }
+
+  // Check single-use
+  if (codeRecord.used_at) {
+    return { valid: false, error: 'invalid_grant', error_description: 'Authorization code has already been used' };
+  }
+
+  // Check expiration
+  if (codeRecord.expires_at < new Date()) {
+    return { valid: false, error: 'invalid_grant', error_description: 'Authorization code has expired' };
+  }
+
+  // Check client binding
+  if (codeRecord.client_id !== params.clientId) {
+    return { valid: false, error: 'invalid_grant', error_description: 'Client ID mismatch for authorization code' };
+  }
+
+  // Check redirect URI if provided
+  if (params.redirectUri && !redirectUriMatches(params.redirectUri, codeRecord.redirect_uri)) {
+    return { valid: false, error: 'invalid_grant', error_description: 'redirect_uri does not match authorization code' };
+  }
+
+  // Check PKCE
+  const isPkceValid = pkceHelper
+    ? pkceHelper.verifyPkce(
+        params.codeVerifier,
+        codeRecord.code_challenge,
+        codeRecord.code_challenge_method
+      )
+    : false;
+
+  if (!isPkceValid) {
+    return { valid: false, error: 'invalid_grant', error_description: 'code_verifier does not match code_challenge' };
+  }
+
+  // Check active endpoint
+  if (!codeRecord.endpoint.is_active) {
+    return { valid: false, error: 'invalid_grant', error_description: 'MCP endpoint is inactive' };
+  }
+
+  // Mark as used atomically
+  await prisma.oAuthAuthorizationCode.update({
+    where: { id: codeRecord.id },
+    data: { used_at: new Date() },
+  });
+
+  return { valid: true, codeRecord };
+}
+
+/**
+ * Issues an OAuth token set (JWT Access Token + Refresh Token).
+ */
+export async function issueOAuthTokenSet(params: {
+  userId: string;
+  endpointId: string;
+  clientId: string;
+  scope?: string;
+  reqOrigin?: string | null;
+}) {
+  const prisma = getPrismaClient();
+  const jwtHelper = getJwtHelper();
+
+  // 1. Generate JWT access token
+  const { token: accessToken, expiresIn, payload } = jwtHelper.signMcpAccessToken({
+    userId: params.userId,
+    endpointId: params.endpointId,
+    clientId: params.clientId,
+    scope: params.scope,
+    expiresInSeconds: 3600, // 1 hour
+    reqOrigin: params.reqOrigin,
+  });
+
+  // 2. Generate Refresh Token
+  const rawRefreshToken = `mcp_rt_${crypto.randomBytes(32).toString('hex')}`;
+  const rtHash = hashOpaqueToken(rawRefreshToken);
+  const rtExpiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); // 30 days
+
+  await prisma.oAuthRefreshToken.create({
+    data: {
+      token_hash: rtHash,
+      client_id: params.clientId,
+      user_id: params.userId,
+      endpoint_id: params.endpointId,
+      scope: params.scope || 'mcp:read mcp:write',
+      resource: payload.aud,
+      expires_at: rtExpiresAt,
+    },
+  });
+
+  return {
+    access_token: accessToken,
+    token_type: 'Bearer',
+    expires_in: expiresIn,
+    refresh_token: rawRefreshToken,
+    scope: params.scope || 'mcp:read mcp:write',
+  };
+}
+
+/**
+ * Refreshes an access token using a valid refresh token.
+ */
+export async function refreshOAuthToken(params: {
+  clientId: string;
+  refreshToken: string;
+  scope?: string;
+  resource?: string;
+  reqOrigin?: string | null;
+}) {
+  const prisma = getPrismaClient();
+  const jwtHelper = getJwtHelper();
+  const rtHash = hashOpaqueToken(params.refreshToken);
+
+  const rtRecord = await prisma.oAuthRefreshToken.findUnique({
+    where: { token_hash: rtHash },
+    include: { endpoint: true },
+  });
+
+  if (!rtRecord) {
+    return { valid: false, error: 'invalid_grant', error_description: 'Refresh token not found' };
+  }
+
+  if (rtRecord.revoked_at) {
+    return { valid: false, error: 'invalid_grant', error_description: 'Refresh token has been revoked' };
+  }
+
+  if (rtRecord.expires_at < new Date()) {
+    return { valid: false, error: 'invalid_grant', error_description: 'Refresh token has expired' };
+  }
+
+  if (rtRecord.client_id !== params.clientId) {
+    return { valid: false, error: 'invalid_grant', error_description: 'Client ID mismatch for refresh token' };
+  }
+
+  if (!rtRecord.endpoint.is_active) {
+    return { valid: false, error: 'invalid_grant', error_description: 'MCP endpoint is inactive' };
+  }
+
+  // Issue new access token
+  const scope = params.scope || rtRecord.scope || 'mcp:read mcp:write';
+  const { token: newAccessToken, expiresIn } = jwtHelper.signMcpAccessToken({
+    userId: rtRecord.user_id,
+    endpointId: rtRecord.endpoint_id,
+    clientId: params.clientId,
+    scope,
+    expiresInSeconds: 3600,
+    reqOrigin: params.reqOrigin,
+  });
+
+  return {
+    valid: true,
+    tokens: {
+      access_token: newAccessToken,
+      token_type: 'Bearer',
+      expires_in: expiresIn,
+      scope,
+    },
+  };
+}
+
+/**
+ * Revokes a token (RFC 7009).
+ */
+export async function revokeOAuthToken(token: string) {
+  const prisma = getPrismaClient();
+  const tokenHash = hashOpaqueToken(token);
+
+  await prisma.oAuthRefreshToken.updateMany({
+    where: { token_hash: tokenHash, revoked_at: null },
+    data: { revoked_at: new Date() },
+  });
+}

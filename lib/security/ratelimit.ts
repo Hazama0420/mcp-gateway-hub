@@ -11,6 +11,9 @@ export const LIMITS = {
   MCP_REQUEST: { limit: 100, windowMs: 60 * 1000 }, // 100 requests per minute per endpoint
   PLAYGROUND: { limit: 30, windowMs: 60 * 1000 }, // 30 executions per minute per user/IP
   OPENAPI_IMPORT: { limit: 5, windowMs: 60 * 1000 }, // 5 imports per minute per user/IP
+  OAUTH_AUTH: { limit: 30, windowMs: 60 * 1000 }, // 30 authorization requests per minute per IP
+  OAUTH_TOKEN: { limit: 30, windowMs: 60 * 1000 }, // 30 token exchanges per minute per IP
+  OAUTH_REGISTER: { limit: 10, windowMs: 60 * 1000 }, // 10 registrations per minute per IP
 };
 
 interface RateLimitInfo {

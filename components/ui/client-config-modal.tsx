@@ -28,7 +28,7 @@ export function ClientConfigModal({
   onOpenChange,
   endpoint,
 }: ClientConfigModalProps) {
-  const [activeTab, setActiveTab] = React.useState<'claude' | 'cursor'>('claude');
+  const [activeTab, setActiveTab] = React.useState<'gemini' | 'claude' | 'cursor'>('gemini');
   const [copied, setCopied] = React.useState(false);
 
   if (!endpoint) return null;
@@ -54,14 +54,29 @@ export function ClientConfigModal({
     url: sseUrl,
   };
 
-  const currentJson =
-    activeTab === 'claude'
+  // Gemini Spark / Remote MCP Config
+  const geminiConfig = {
+    name: endpoint.name,
+    type: 'streamable-http',
+    server_url: httpUrl,
+    auth: {
+      type: 'oauth2',
+      grant_type: 'authorization_code',
+      code_challenge_method: 'S256',
+      discovery_url: `${origin}/.well-known/oauth-protected-resource/api/mcp/${endpoint.id}/http`,
+    },
+  };
+
+  const currentText =
+    activeTab === 'gemini'
+      ? httpUrl
+      : activeTab === 'claude'
       ? JSON.stringify(claudeConfig, null, 2)
       : JSON.stringify(cursorConfig, null, 2);
 
   const handleCopy = async () => {
     try {
-      await navigator.clipboard.writeText(currentJson);
+      await navigator.clipboard.writeText(currentText);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch (err) {
@@ -82,7 +97,7 @@ export function ClientConfigModal({
                 Connect to AI Client
               </DialogTitle>
               <DialogDescription className="text-xs font-medium text-[var(--color-text-secondary)]">
-                Connect <strong className="text-[var(--color-text-primary)] font-bold">{endpoint.name}</strong> to Claude Desktop or Cursor AI.
+                Connect <strong className="text-[var(--color-text-primary)] font-bold">{endpoint.name}</strong> to Gemini Spark, Claude Desktop, or Cursor AI.
               </DialogDescription>
             </div>
           </div>
@@ -90,6 +105,16 @@ export function ClientConfigModal({
 
         {/* Tab Switcher */}
         <div className="flex gap-2 border-b-2 border-[var(--color-border)] pb-2 pt-2">
+          <button
+            onClick={() => setActiveTab('gemini')}
+            className={`pop-btn px-3.5 py-1.5 text-xs font-bold transition-all ${
+              activeTab === 'gemini'
+                ? 'bg-amber-400 text-slate-950 shadow-[2px_2px_0px_0px_rgba(15,23,42,1)]'
+                : 'bg-[var(--color-surface-elevated)] text-[var(--color-text-secondary)] shadow-none'
+            }`}
+          >
+            Gemini Spark (OAuth)
+          </button>
           <button
             onClick={() => setActiveTab('claude')}
             className={`pop-btn px-3.5 py-1.5 text-xs font-bold transition-all ${
@@ -113,19 +138,33 @@ export function ClientConfigModal({
         </div>
 
         <div className="space-y-4 pt-1">
-          {activeTab === 'claude' ? (
+          {activeTab === 'gemini' ? (
+            <div className="space-y-3 text-xs">
+              <p className="text-[var(--color-text-secondary)] font-medium">
+                In <strong>Gemini Spark &gt; Connected Apps &gt; Add Custom MCP</strong>, paste this Server URL:
+              </p>
+              <div className="p-3 rounded-xl bg-[var(--color-surface-elevated)] border-2 border-[var(--color-border)] font-mono font-bold text-xs break-all">
+                {httpUrl}
+              </div>
+              <div className="p-3 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-700 text-[11px] font-mono space-y-1 text-slate-900 dark:text-amber-200">
+                <div>✦ <strong>Protocol:</strong> MCP Streamable HTTP</div>
+                <div>✦ <strong>Authentication:</strong> OAuth 2.1 + PKCE (S256)</div>
+                <div>✦ <strong>Discovery:</strong> RFC 9728 Protected Resource Metadata</div>
+              </div>
+            </div>
+          ) : activeTab === 'claude' ? (
             <div className="space-y-2 text-xs">
               <p className="text-[var(--color-text-secondary)] font-medium">
                 Add this snippet to your <code className="bg-amber-100 dark:bg-amber-900/50 px-1 py-0.5 rounded font-mono font-bold text-slate-900 dark:text-amber-200">claude_desktop_config.json</code>:
               </p>
-              <CodeBlock code={currentJson} language="json" title="claude_desktop_config.json" />
+              <CodeBlock code={currentText} language="json" title="claude_desktop_config.json" />
             </div>
           ) : (
             <div className="space-y-2 text-xs">
               <p className="text-[var(--color-text-secondary)] font-medium">
                 In Cursor AI, go to <strong>Settings &gt; Features &gt; MCP</strong> and add a new SSE endpoint with:
               </p>
-              <CodeBlock code={currentJson} language="json" title="Cursor MCP Config" />
+              <CodeBlock code={currentText} language="json" title="Cursor MCP Config" />
             </div>
           )}
 

@@ -339,6 +339,15 @@ export default function EndpointsPage() {
                     </div>
                   </div>
 
+                  {/* MCP Authentication Status */}
+                  <div className="flex items-center justify-between text-[11px] font-mono font-bold bg-[var(--color-surface-elevated)] p-2 rounded-xl border border-[var(--color-border)]">
+                    <span className="text-[var(--color-text-muted)] uppercase text-[10px]">MCP Auth:</span>
+                    <div className="flex items-center gap-3 text-[10px]">
+                      <span className="text-emerald-600 dark:text-emerald-400">OAuth 2.1 ● Available</span>
+                      <span className="text-sky-600 dark:text-sky-400">API Key ● Available</span>
+                    </div>
+                  </div>
+
                   {/* Streamable HTTP URL Copy Row */}
                   <div className="space-y-2 pt-2 border-t-2 border-black/5 dark:border-white/5">
                     <div className="flex items-center justify-between gap-2 rounded-xl bg-[var(--color-surface-elevated)] border-2 border-[var(--color-border)] px-3 py-1.5 text-xs">

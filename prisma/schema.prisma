@@ -24,6 +24,8 @@ model User {
   accounts     Account[]
   sessions     Session[]
   logs         ExecutionLog[]
+  oauth_codes  OAuthAuthorizationCode[]
+  oauth_refresh_tokens OAuthRefreshToken[]
 }
 
 // ============================================
@@ -41,6 +43,8 @@ model McpEndpoint {
   services     EndpointService[]
   logs         ExecutionLog[]
   integrations EndpointIntegration[]
+  oauth_codes  OAuthAuthorizationCode[]
+  oauth_refresh_tokens OAuthRefreshToken[]
 }
 
 // ============================================
@@ -218,4 +222,90 @@ model VerificationToken {
   expires    DateTime
 
   @@unique([identifier, token])
+}
+
+// ============================================
+// OAUTH 2.1 - CLIENT REGISTRATION (RFC 7591)
+// ============================================
+model OAuthClient {
+  id                         String    @id @default(uuid())
+  client_id                  String    @unique
+  client_secret_hash         String?
+  client_name                String?
+  client_uri                 String?
+  logo_uri                   String?
+  redirect_uris              String[]  // Registered redirect URIs
+  grant_types                String[]  @default(["authorization_code", "refresh_token"])
+  response_types             String[]  @default(["code"])
+  token_endpoint_auth_method String    @default("none") // "none" for public, "client_secret_post"
+  scope                      String?
+  contacts                   String[]  @default([])
+  tos_uri                    String?
+  policy_uri                 String?
+  jwks_uri                   String?
+  software_id                String?
+  software_version           String?
+  client_secret_expires_at   DateTime?
+  created_at                 DateTime  @default(now())
+  updated_at                 DateTime  @updatedAt
+
+  codes          OAuthAuthorizationCode[]
+  refresh_tokens OAuthRefreshToken[]
+
+  @@index([client_id])
+}
+
+// ============================================
+// OAUTH 2.1 - AUTHORIZATION CODE
+// ============================================
+model OAuthAuthorizationCode {
+  id                    String    @id @default(uuid())
+  code_hash             String    @unique
+  client_id             String
+  user_id               String
+  endpoint_id           String
+  redirect_uri          String
+  code_challenge        String
+  code_challenge_method String    @default("S256")
+  scope                 String?
+  resource              String?
+  expires_at            DateTime
+  used_at               DateTime?
+  created_at            DateTime  @default(now())
+
+  client   OAuthClient @relation(fields: [client_id], references: [client_id], onDelete: Cascade)
+  user     User        @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  endpoint McpEndpoint @relation(fields: [endpoint_id], references: [id], onDelete: Cascade)
+
+  @@index([code_hash])
+  @@index([client_id])
+  @@index([user_id])
+  @@index([endpoint_id])
+  @@index([expires_at])
+}
+
+// ============================================
+// OAUTH 2.1 - REFRESH TOKEN
+// ============================================
+model OAuthRefreshToken {
+  id          String    @id @default(uuid())
+  token_hash  String    @unique
+  client_id   String
+  user_id     String
+  endpoint_id String
+  scope       String?
+  resource    String?
+  expires_at  DateTime
+  revoked_at  DateTime?
+  created_at  DateTime  @default(now())
+
+  client   OAuthClient @relation(fields: [client_id], references: [client_id], onDelete: Cascade)
+  user     User        @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  endpoint McpEndpoint @relation(fields: [endpoint_id], references: [id], onDelete: Cascade)
+
+  @@index([token_hash])
+  @@index([client_id])
+  @@index([user_id])
+  @@index([endpoint_id])
+  @@index([expires_at])
 }

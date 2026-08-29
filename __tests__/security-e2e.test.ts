@@ -283,6 +283,61 @@ async function runE2EValidation() {
   assert('No ENCRYPTION_MASTER_KEY in serialized metadata', !sanitizedMetaString.includes(process.env.ENCRYPTION_MASTER_KEY));
 
   // =========================================================================
+  // SCENARIO 11: P2.4 MCP OAuth 2.1 & Gemini Spark Interoperability
+  // =========================================================================
+  console.log('\n--- SCENARIO 11: MCP OAuth 2.1 & Gemini Spark Handshake (P2.4) ---');
+
+  const { generateCodeChallenge, verifyPkce } = require('../lib/oauth/pkce');
+  const { signMcpAccessToken, verifyMcpAccessToken, isJwtToken } = require('../lib/oauth/jwt');
+  const { createProtectedResourceMetadata, createAuthorizationServerMetadata, getOAuthProtectedResourceMetadataUrl } = require('../lib/oauth/config');
+  const { redirectUriMatches } = require('../lib/oauth/store');
+
+  const geminiEndpointId = 'ep-gemini-test-999';
+  const geminiUserId = tenantUserA.id;
+  const geminiClientId = 'mcp_client_gemini_spark_connected_app';
+
+  // 1. Initial unauthenticated request -> 401 + WWW-Authenticate header
+  const prmUrl = getOAuthProtectedResourceMetadataUrl(geminiEndpointId);
+  const wwwAuthHeader = `Bearer resource_metadata="${prmUrl}"`;
+  assert('Gemini Flow 1: 401 challenges with WWW-Authenticate pointing to PRM', wwwAuthHeader.includes(prmUrl));
+
+  // 2. Discover Protected Resource Metadata (RFC 9728)
+  const prmMetadata = createProtectedResourceMetadata(geminiEndpointId);
+  assert('Gemini Flow 2: PRM identifies resource URL and authorization servers', prmMetadata.resource.includes(geminiEndpointId) && prmMetadata.authorization_servers.length > 0);
+
+  // 3. Discover Authorization Server Metadata (RFC 8414)
+  const asMeta = createAuthorizationServerMetadata();
+  assert('Gemini Flow 3: AS metadata advertises S256 and authorization_code', asMeta.code_challenge_methods_supported.includes('S256') && asMeta.grant_types_supported.includes('authorization_code'));
+
+  // 4. PKCE S256 Exchange
+  const testVerifier = 'gemini_spark_random_code_verifier_string_43_chars_long_minimum';
+  const testChallenge = generateCodeChallenge(testVerifier);
+  assert('Gemini Flow 4: PKCE S256 challenge generated and verified', verifyPkce(testVerifier, testChallenge, 'S256'));
+
+  // 5. Issue Access Token JWT
+  const { token: geminiAccessToken } = signMcpAccessToken({
+    userId: geminiUserId,
+    endpointId: geminiEndpointId,
+    clientId: geminiClientId,
+    scope: 'mcp:read mcp:write',
+    expiresInSeconds: 3600,
+  });
+
+  assert('Gemini Flow 5: Access Token recognized as JWT', isJwtToken(geminiAccessToken));
+
+  // 6. Token Verification with Resource Binding
+  const geminiVerifyResult = verifyMcpAccessToken(geminiAccessToken, geminiEndpointId);
+  assert('Gemini Flow 6: Token valid on target Gemini endpoint', geminiVerifyResult.valid && geminiVerifyResult.payload.sub === geminiUserId);
+
+  // 7. Token rejected on different endpoint
+  const wrongEpVerifyResult = verifyMcpAccessToken(geminiAccessToken, 'ep-other-endpoint-000');
+  assert('Gemini Flow 7: Token for Endpoint A REJECTED on Endpoint B', !wrongEpVerifyResult.valid);
+
+  // 8. Legacy API key continues to work alongside OAuth
+  const isLegacyKeyStillValid = await bcrypt.compare(rawKeyA, endpointA.api_key_hash);
+  assert('Gemini Flow 8: Legacy API key continues to work without regression', isLegacyKeyStillValid);
+
+  // =========================================================================
   // SUMMARY
   // =========================================================================
   console.log('\n================================================================');

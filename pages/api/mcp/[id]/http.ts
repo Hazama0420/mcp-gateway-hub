@@ -1,4 +1,3 @@
-// pages/api/mcp/[id]/http.ts
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
@@ -10,6 +9,8 @@ import bcrypt from 'bcryptjs';
 import { checkRateLimit, applyRateLimitHeaders, LIMITS } from '@/lib/security/ratelimit';
 import { getMcpCorsHeaders, applyCorsHeaders } from '@/lib/security/cors';
 import { recordExecutionLog, recordSecurityEvent, generateExecutionId } from '@/lib/security/audit';
+import { isJwtToken, verifyMcpAccessToken } from '@/lib/oauth/jwt';
+import { getOAuthProtectedResourceMetadataUrl } from '@/lib/oauth/config';
 
 import { registerTools as registerGithub } from '@/lib/adapters/github';
 import { registerTools as registerPostgres } from '@/lib/adapters/postgres';
@@ -148,9 +149,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(429).json({ error: 'Too many requests' });
   }
 
+  const resourceMetadataUrl = getOAuthProtectedResourceMetadataUrl(id as string, origin);
+  const buildWwwAuthHeader = (errorCode?: string, errorDescription?: string) => {
+    if (errorCode && errorDescription) {
+      return `Bearer error="${errorCode}", error_description="${errorDescription}", resource_metadata="${resourceMetadataUrl}"`;
+    }
+    return `Bearer resource_metadata="${resourceMetadataUrl}"`;
+  };
+
   // 1. Extract Authorization header
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    res.setHeader('WWW-Authenticate', buildWwwAuthHeader());
     recordSecurityEvent({
       eventType: 'AUTH_FAILED',
       endpointId: id as string,
@@ -158,11 +168,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       ip: String(ip),
       reason: 'Missing or malformed Bearer header',
     });
-    return res.status(401).json({ error: 'Unauthorized' });
+    return res.status(401).json({
+      error: 'Unauthorized',
+      message: 'Bearer token required. Discover OAuth metadata via WWW-Authenticate header.',
+    });
   }
 
-  const token = authHeader.substring(7);
+  const token = authHeader.substring(7).trim();
   if (!token) {
+    res.setHeader('WWW-Authenticate', buildWwwAuthHeader('invalid_token', 'Empty Bearer token'));
     recordSecurityEvent({
       eventType: 'AUTH_FAILED',
       endpointId: id as string,
@@ -170,16 +184,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       ip: String(ip),
       reason: 'Empty Bearer token',
     });
-    return res.status(401).json({ error: 'Unauthorized' });
+    return res.status(401).json({ error: 'Unauthorized', message: 'Empty Bearer token' });
   }
 
-  // 2. Fetch endpoint to get the stored API key hash
+  // 2. Fetch endpoint
   const endpoint = await prisma.mcpEndpoint.findUnique({
     where: { id: id as string },
-    include: { services: true }
+    include: { services: true },
   });
 
   if (!endpoint || !endpoint.is_active) {
+    res.setHeader('WWW-Authenticate', buildWwwAuthHeader('invalid_token', 'Endpoint not found or inactive'));
     recordSecurityEvent({
       eventType: 'AUTH_FAILED',
       endpointId: id as string,
@@ -187,34 +202,75 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       ip: String(ip),
       reason: 'Endpoint not found or inactive',
     });
-    return res.status(401).json({ error: 'Unauthorized' });
+    return res.status(401).json({ error: 'Unauthorized', message: 'Endpoint not found or inactive' });
   }
 
-  if (!endpoint.api_key_hash) {
-    recordSecurityEvent({
-      eventType: 'AUTH_FAILED',
-      endpointId: endpoint.id,
-      userId: endpoint.user_id,
-      route: '/api/mcp/[id]/http',
-      ip: String(ip),
-      reason: 'Endpoint has no configured API key hash',
-    });
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
+  // 3. Classify and verify token (OAuth JWT vs Legacy API Key)
+  const isOAuth = isJwtToken(token);
+  let authType: 'OAUTH' | 'API_KEY' = 'API_KEY';
 
-  // 3. Verify API key
-  const isKeyValid = await bcrypt.compare(token, endpoint.api_key_hash);
-  if (!isKeyValid) {
-    recordSecurityEvent({
-      eventType: 'AUTH_FAILED',
-      endpointId: endpoint.id,
-      userId: endpoint.user_id,
-      route: '/api/mcp/[id]/http',
-      ip: String(ip),
-      reason: 'Invalid API key credentials',
-    });
-    applyRateLimitHeaders(res, authLimitResult);
-    return res.status(401).json({ error: 'Unauthorized' });
+  if (isOAuth) {
+    const verifyResult = verifyMcpAccessToken(token, id as string, origin);
+    if (!verifyResult.valid || !verifyResult.payload) {
+      res.setHeader('WWW-Authenticate', buildWwwAuthHeader('invalid_token', verifyResult.error));
+      recordSecurityEvent({
+        eventType: 'OAUTH_TOKEN_REJECTED',
+        endpointId: endpoint.id,
+        userId: endpoint.user_id,
+        route: '/api/mcp/[id]/http',
+        ip: String(ip),
+        reason: verifyResult.error,
+      });
+      return res.status(401).json({ error: 'Unauthorized', message: verifyResult.error });
+    }
+
+    // Enforce Tenant Isolation
+    if (verifyResult.payload.sub !== endpoint.user_id) {
+      res.setHeader('WWW-Authenticate', buildWwwAuthHeader('insufficient_scope', 'Cross-tenant access forbidden'));
+      recordSecurityEvent({
+        eventType: 'TENANT_ACCESS_DENIED',
+        endpointId: endpoint.id,
+        userId: endpoint.user_id,
+        route: '/api/mcp/[id]/http',
+        ip: String(ip),
+        reason: 'Cross-tenant OAuth token reuse attempted',
+        metadata: { token_sub: verifyResult.payload.sub, endpoint_owner: endpoint.user_id },
+      });
+      return res.status(403).json({ error: 'Forbidden', message: 'Cross-tenant access forbidden' });
+    }
+
+    authType = 'OAUTH';
+  } else {
+    // Verify Legacy API Key
+    if (!endpoint.api_key_hash) {
+      res.setHeader('WWW-Authenticate', buildWwwAuthHeader('invalid_token', 'Endpoint has no configured API key'));
+      recordSecurityEvent({
+        eventType: 'AUTH_FAILED',
+        endpointId: endpoint.id,
+        userId: endpoint.user_id,
+        route: '/api/mcp/[id]/http',
+        ip: String(ip),
+        reason: 'Endpoint has no configured API key hash',
+      });
+      return res.status(401).json({ error: 'Unauthorized', message: 'Endpoint has no configured API key hash' });
+    }
+
+    const isKeyValid = await bcrypt.compare(token, endpoint.api_key_hash);
+    if (!isKeyValid) {
+      res.setHeader('WWW-Authenticate', buildWwwAuthHeader('invalid_token', 'Invalid API key credentials'));
+      recordSecurityEvent({
+        eventType: 'AUTH_FAILED',
+        endpointId: endpoint.id,
+        userId: endpoint.user_id,
+        route: '/api/mcp/[id]/http',
+        ip: String(ip),
+        reason: 'Invalid API key credentials',
+      });
+      applyRateLimitHeaders(res, authLimitResult);
+      return res.status(401).json({ error: 'Unauthorized', message: 'Invalid API key credentials' });
+    }
+
+    authType = 'API_KEY';
   }
 
   // Rate Limit: Valid Request (Post-Auth quota)
