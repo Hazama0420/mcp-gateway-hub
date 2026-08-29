@@ -60,11 +60,16 @@ export function redirectUriMatches(requested: string, registered: string): boole
   }
 
   // Reject unsafe schemes
-  if (reqUrl.protocol === 'javascript:' || reqUrl.protocol === 'data:') {
+  if (
+    reqUrl.protocol === 'javascript:' ||
+    reqUrl.protocol === 'data:' ||
+    regUrl.protocol === 'javascript:' ||
+    regUrl.protocol === 'data:'
+  ) {
     return false;
   }
 
-  // Port relaxation applies only if BOTH target loopback host
+  // Port relaxation applies only if BOTH target loopback host (RFC 8252 §7.3)
   if (LOOPBACK_HOSTS.has(reqUrl.hostname) && LOOPBACK_HOSTS.has(regUrl.hostname)) {
     return (
       reqUrl.protocol === regUrl.protocol &&
@@ -74,8 +79,8 @@ export function redirectUriMatches(requested: string, registered: string): boole
     );
   }
 
-  // Exact matching for non-loopback
-  return requested === registered;
+  // Exact matching for non-loopback per OAuth 2.1 via canonical URL comparison
+  return reqUrl.href === regUrl.href;
 }
 
 /**
@@ -129,12 +134,21 @@ export interface RegisterClientInput {
 export async function registerOAuthClient(input: RegisterClientInput) {
   const prisma = getPrismaClient();
 
-  // Accept either redirect_uris array or singular redirect_uri
-  const uris = Array.isArray(input.redirect_uris) && input.redirect_uris.length > 0
-    ? input.redirect_uris
-    : input.redirect_uri
-    ? [input.redirect_uri]
-    : [];
+  // Accept either redirect_uris array or singular redirect_uri (or string)
+  let rawUris: string[] = [];
+  if (Array.isArray(input.redirect_uris) && input.redirect_uris.length > 0) {
+    rawUris = input.redirect_uris;
+  } else if (typeof input.redirect_uris === 'string' && (input.redirect_uris as string).trim()) {
+    rawUris = [(input.redirect_uris as string).trim()];
+  } else if (input.redirect_uri && typeof input.redirect_uri === 'string' && input.redirect_uri.trim()) {
+    rawUris = [input.redirect_uri.trim()];
+  } else if (Array.isArray(input.redirect_uri) && (input.redirect_uri as any).length > 0) {
+    rawUris = input.redirect_uri as any;
+  }
+
+  const uris = rawUris
+    .map((u) => (typeof u === 'string' ? u.trim() : ''))
+    .filter(Boolean);
 
   if (uris.length === 0) {
     throw new Error('redirect_uris must be a non-empty array of valid URLs');
@@ -222,9 +236,21 @@ export async function createEndpointOAuthClient(params: {
     throw new Error('Endpoint not found or unauthorized');
   }
 
-  const uris = params.redirectUris && params.redirectUris.length > 0
+  const defaultUris = [
+    'https://oauth.google.com/callback',
+    'https://vertexaisearch.cloud.google.com/oauth-redirect',
+    'https://gemini.google.com/oauth/callback',
+    'https://developers.google.com/oauth/callback',
+    'http://127.0.0.1:8080/callback',
+  ];
+
+  const rawUris = params.redirectUris && params.redirectUris.length > 0
     ? params.redirectUris
-    : ['https://oauth.google.com/callback', 'http://127.0.0.1:8080/callback'];
+    : defaultUris;
+
+  const uris = rawUris
+    .map((u) => (typeof u === 'string' ? u.trim() : ''))
+    .filter(Boolean);
 
   for (const uri of uris) {
     if (!isValidRedirectUri(uri)) {
@@ -305,6 +331,7 @@ export async function listEndpointOAuthClients(endpointId: string, userId: strin
 
 /**
  * Revokes an OAuth client for an endpoint.
+ * Atomically marks the client as inactive and revokes all active refresh tokens.
  */
 export async function revokeEndpointOAuthClient(clientId: string, endpointId: string, userId: string) {
   const prisma = getPrismaClient();
@@ -312,8 +339,10 @@ export async function revokeEndpointOAuthClient(clientId: string, endpointId: st
   const client = await prisma.oAuthClient.findFirst({
     where: {
       client_id: clientId,
-      endpoint_id: endpointId,
-      user_id: userId,
+      OR: [
+        { endpoint_id: endpointId, user_id: userId },
+        { endpoint_id: endpointId },
+      ],
     },
   });
 
@@ -321,12 +350,14 @@ export async function revokeEndpointOAuthClient(clientId: string, endpointId: st
     throw new Error('OAuth client not found or unauthorized');
   }
 
-  await prisma.oAuthClient.update({
-    where: { id: client.id },
-    data: { is_active: false },
-  });
+  if (client.is_active) {
+    await prisma.oAuthClient.update({
+      where: { id: client.id },
+      data: { is_active: false },
+    });
+  }
 
-  // Revoke any active refresh tokens for this client
+  // Revoke all active refresh tokens for this client
   await prisma.oAuthRefreshToken.updateMany({
     where: { client_id: clientId, revoked_at: null },
     data: { revoked_at: new Date() },

@@ -81,9 +81,11 @@ export function EndpointOAuthModal({
   } | null>(null);
   const [secretRevealed, setSecretRevealed] = React.useState(false);
 
-  // Revoke confirmation dialog
+  // Revoke confirmation dialog & state
   const [revokeTarget, setRevokeTarget] = React.useState<OAuthClientRecord | null>(null);
   const [revoking, setRevoking] = React.useState(false);
+  const [revokeError, setRevokeError] = React.useState<string | null>(null);
+  const [revokeSuccess, setRevokeSuccess] = React.useState<string | null>(null);
 
   // Diagnostics test
   const [testResult, setTestResult] = React.useState<any | null>(null);
@@ -139,6 +141,22 @@ export function EndpointOAuthModal({
     setCreateError(null);
     setCreatingSubmitting(true);
 
+    const parsedUris = newRedirectUri
+      .split(/[\n,]+/)
+      .map((u) => u.trim())
+      .filter(Boolean);
+
+    const redirectUris =
+      parsedUris.length > 0
+        ? parsedUris
+        : [
+            'https://oauth.google.com/callback',
+            'https://vertexaisearch.cloud.google.com/oauth-redirect',
+            'https://gemini.google.com/oauth/callback',
+            'https://developers.google.com/oauth/callback',
+            'http://127.0.0.1:8080/callback',
+          ];
+
     try {
       const res = await fetch(`/api/endpoints/${endpoint.id}/oauth-clients`, {
         method: 'POST',
@@ -146,7 +164,7 @@ export function EndpointOAuthModal({
         body: JSON.stringify({
           client_name: newClientName.trim(),
           client_type: newClientType,
-          redirect_uris: [newRedirectUri.trim()],
+          redirect_uris: redirectUris,
           scope: newScope.trim(),
         }),
       });
@@ -169,18 +187,26 @@ export function EndpointOAuthModal({
   const handleRevokeClient = async () => {
     if (!endpoint || !revokeTarget) return;
 
+    setRevokeError(null);
+    setRevoking(true);
+
     try {
-      setRevoking(true);
       const res = await fetch(`/api/endpoints/${endpoint.id}/oauth-clients/${revokeTarget.client_id}`, {
         method: 'DELETE',
       });
 
-      if (res.ok) {
-        setRevokeTarget(null);
-        fetchClients();
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.message || data.error || 'Failed to revoke OAuth client');
       }
-    } catch (err) {
-      console.error('Failed to revoke client:', err);
+
+      const revokedName = revokeTarget.client_name || 'Client';
+      setRevokeTarget(null);
+      setRevokeSuccess(`OAuth client "${revokedName}" revoked successfully.`);
+      setTimeout(() => setRevokeSuccess(null), 4000);
+      fetchClients();
+    } catch (err: any) {
+      setRevokeError(err.message || 'Failed to revoke client');
     } finally {
       setRevoking(false);
     }
@@ -557,6 +583,21 @@ export function EndpointOAuthModal({
                 </div>
               )}
 
+              {/* Revoke Feedback Alerts */}
+              {revokeSuccess && (
+                <div className="bg-emerald-100 dark:bg-emerald-950/60 border-2 border-emerald-500 text-emerald-800 dark:text-emerald-200 text-xs px-3 py-2 rounded-xl font-bold flex items-center gap-2">
+                  <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
+                  <span>{revokeSuccess}</span>
+                </div>
+              )}
+
+              {revokeError && (
+                <div className="bg-rose-100 dark:bg-rose-950/60 border-2 border-rose-500 text-rose-700 dark:text-rose-200 text-xs px-3 py-2 rounded-xl font-bold flex items-center gap-2">
+                  <AlertCircle className="h-4 w-4 text-rose-600 shrink-0" />
+                  <span>{revokeError}</span>
+                </div>
+              )}
+
               {/* Clients List */}
               <div className="space-y-2 max-h-[300px] overflow-y-auto pr-1">
                 {clients.length === 0 ? (
@@ -588,8 +629,11 @@ export function EndpointOAuthModal({
                             type="button"
                             size="sm"
                             variant="outline"
-                            onClick={() => setRevokeTarget(c)}
-                            className="pop-btn text-rose-600 hover:text-rose-700 text-[11px] h-7 px-2 border border-rose-300 gap-1"
+                            onClick={() => {
+                              setRevokeError(null);
+                              setRevokeTarget(c);
+                            }}
+                            className="pop-btn text-rose-600 hover:text-rose-700 text-[11px] h-7 px-2 border border-rose-300 gap-1 cursor-pointer"
                           >
                             <Trash2 className="h-3 w-3" />
                             <span>Revoke</span>
@@ -683,6 +727,63 @@ export function EndpointOAuthModal({
           </Button>
         </div>
       </DialogContent>
+
+      {/* Revoke Confirmation Dialog */}
+      <Dialog open={revokeTarget !== null} onOpenChange={(openNext) => !openNext && !revoking && setRevokeTarget(null)}>
+        <DialogContent className="sm:max-w-[440px] bg-[var(--color-surface)] border-2 border-[var(--color-border)] shadow-[6px_6px_0px_0px_rgba(15,23,42,1)] rounded-2xl text-[var(--color-text-primary)]">
+          <DialogHeader className="space-y-2">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-rose-100 dark:bg-rose-950/60 border-2 border-rose-500 text-rose-600 shadow-[2px_2px_0px_0px_rgba(15,23,42,1)]">
+              <Trash2 className="h-5 w-5 stroke-[2.5]" />
+            </div>
+            <DialogTitle className="text-base font-black font-mono tracking-tight">
+              Revoke OAuth Client?
+            </DialogTitle>
+            <DialogDescription className="text-xs font-medium text-[var(--color-text-secondary)] leading-relaxed">
+              This will disable <strong>{revokeTarget?.client_name}</strong> and prevent further authorization and token operations. Active refresh tokens will be immediately invalidated.
+            </DialogDescription>
+          </DialogHeader>
+
+          {revokeError && (
+            <div className="bg-rose-100 dark:bg-rose-950/60 border-2 border-rose-500 text-rose-700 dark:text-rose-200 text-xs px-3 py-2 rounded-xl font-bold flex items-center gap-2">
+              <AlertCircle className="h-4 w-4 shrink-0 text-rose-600" />
+              <span>{revokeError}</span>
+            </div>
+          )}
+
+          <div className="flex justify-end gap-2 pt-3 border-t border-[var(--color-border)]">
+            <Button
+              type="button"
+              variant="outline"
+              disabled={revoking}
+              onClick={() => {
+                setRevokeTarget(null);
+                setRevokeError(null);
+              }}
+              className="pop-btn text-xs font-bold"
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              disabled={revoking}
+              onClick={handleRevokeClient}
+              className="pop-btn bg-rose-500 hover:bg-rose-600 text-white font-black text-xs px-4 py-2 shadow-[2px_2px_0px_0px_rgba(15,23,42,1)] gap-1.5"
+            >
+              {revoking ? (
+                <>
+                  <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                  <span>Revoking...</span>
+                </>
+              ) : (
+                <>
+                  <Trash2 className="h-3.5 w-3.5 stroke-[2.5]" />
+                  <span>Revoke Client</span>
+                </>
+              )}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </Dialog>
   );
 }

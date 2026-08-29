@@ -38,8 +38,26 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: 'invalid_client', error_description: 'Client not found' }, { status: 400 });
   }
 
+  if (!client.is_active) {
+    return NextResponse.json(
+      { error: 'unauthorized_client', error_description: 'OAuth client has been revoked' },
+      { status: 400 }
+    );
+  }
+
   if (redirectUri && !client.redirect_uris.some((registered) => redirectUriMatches(redirectUri, registered))) {
-    return NextResponse.json({ error: 'invalid_request', error_description: 'Unregistered redirect_uri' }, { status: 400 });
+    console.warn('[OAuth Authorize GET] Redirect URI mismatch:', {
+      client_id: client.client_id,
+      requested_redirect_uri: redirectUri,
+      registered_redirect_uris: client.redirect_uris,
+    });
+    return NextResponse.json(
+      {
+        error: 'invalid_request',
+        error_description: 'The OAuth redirect URI is not registered for this client. Please retry the OAuth connection or register the correct redirect URI.',
+      },
+      { status: 400 }
+    );
   }
 
   // Find target endpoint from resource URL or parameter
@@ -133,10 +151,28 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'invalid_client', error_description: 'Client not found' }, { status: 400 });
   }
 
+  if (!client.is_active) {
+    return NextResponse.json(
+      { error: 'unauthorized_client', error_description: 'OAuth client has been revoked' },
+      { status: 400 }
+    );
+  }
+
   let finalRedirectUri = redirectUri;
   if (finalRedirectUri) {
     if (!client.redirect_uris.some((registered) => redirectUriMatches(finalRedirectUri, registered))) {
-      return NextResponse.json({ error: 'invalid_request', error_description: 'Unregistered redirect_uri' }, { status: 400 });
+      console.warn('[OAuth Authorize POST] Redirect URI mismatch:', {
+        client_id: client.client_id,
+        requested_redirect_uri: finalRedirectUri,
+        registered_redirect_uris: client.redirect_uris,
+      });
+      return NextResponse.json(
+        {
+          error: 'invalid_request',
+          error_description: 'The OAuth redirect URI is not registered for this client. Please retry the OAuth connection or register the correct redirect URI.',
+        },
+        { status: 400 }
+      );
     }
   } else if (client.redirect_uris.length === 1) {
     finalRedirectUri = client.redirect_uris[0];

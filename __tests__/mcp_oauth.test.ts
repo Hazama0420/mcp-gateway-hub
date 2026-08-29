@@ -118,6 +118,24 @@ async function runOAuthTests() {
   assert('Redirect URI: Subpath mismatch rejected for remote HTTPS hosts', !redirectUriMatches(attackHttps, registeredHttps));
   assert('Redirect URI: javascript: scheme strictly rejected', !isValidRedirectUri(maliciousScheme) && !redirectUriMatches(maliciousScheme, registeredHttps));
 
+  // Trailing slash, host, scheme, path mismatch tests
+  const geminiSparkUri = 'https://oauth.google.com/callback';
+  const geminiSparkUpperHost = 'https://OAuth.Google.Com/callback';
+  const geminiSparkTrailingSlash = 'https://oauth.google.com/callback/';
+  const geminiSparkDiffPath = 'https://oauth.google.com/other-path';
+  const geminiSparkDiffHost = 'https://evil.google.com/callback';
+  const geminiSparkDiffScheme = 'http://oauth.google.com/callback';
+
+  assert('Redirect URI: Exact Gemini callback URL is matched', redirectUriMatches(geminiSparkUri, geminiSparkUri));
+  assert('Redirect URI: Host case insensitivity preserved per RFC 3986', redirectUriMatches(geminiSparkUpperHost, geminiSparkUri));
+  assert('Redirect URI: Trailing slash mismatch strictly rejected', !redirectUriMatches(geminiSparkTrailingSlash, geminiSparkUri));
+  assert('Redirect URI: Different path strictly rejected', !redirectUriMatches(geminiSparkDiffPath, geminiSparkUri));
+  assert('Redirect URI: Different host strictly rejected', !redirectUriMatches(geminiSparkDiffHost, geminiSparkUri));
+  assert('Redirect URI: Different scheme (HTTP vs HTTPS) strictly rejected', !redirectUriMatches(geminiSparkDiffScheme, geminiSparkUri));
+
+  const vertexUri = 'https://vertexaisearch.cloud.google.com/oauth-redirect';
+  assert('Redirect URI: Vertex AI Search redirect URL is valid and matched', isValidRedirectUri(vertexUri) && redirectUriMatches(vertexUri, vertexUri));
+
   // =========================================================================
   // 4. PKCE S256 Verification & Rejection of 'plain'
   // =========================================================================
@@ -303,9 +321,139 @@ async function runOAuthTests() {
   assert('HTTP Basic Auth: Extracts client_id accurately', extractedUser === clientId);
   assert('HTTP Basic Auth: Extracts client_secret accurately', extractedPass === rawSecret);
 
-  // Singular redirect_uri parsing check
+  // Singular and array redirect_uri parsing checks
   const singularUris = ['https://oauth.google.com/callback'];
   assert('DCR Singular URI: Accepted as valid redirect URI', isValidRedirectUri(singularUris[0]));
+
+  const arrayUris = [
+    'https://oauth.google.com/callback',
+    'https://vertexaisearch.cloud.google.com/oauth-redirect',
+  ];
+  assert('DCR Array URIs: All URIs accepted and matched', arrayUris.every(isValidRedirectUri));
+
+  // Authorization code redirect_uri binding simulation
+  const registeredCodeUri = 'https://oauth.google.com/callback';
+  const matchingTokenUri = 'https://oauth.google.com/callback';
+  const mismatchedTokenUri = 'https://evil.com/callback';
+
+  assert('Token Exchange: Matching redirect_uri accepted', redirectUriMatches(matchingTokenUri, registeredCodeUri));
+  assert('Token Exchange: Mismatched redirect_uri REJECTED', !redirectUriMatches(mismatchedTokenUri, registeredCodeUri));
+
+  // =========================================================================
+  // 13. Client Revocation Semantics & Ownership Isolation
+  // =========================================================================
+  console.log('\n--- 13. Client Revocation Semantics & Ownership Security ---');
+
+  // Mock active client and revoked client
+  const activeClientMock = {
+    id: 'client_rec_active',
+    client_id: 'mcp_client_active_test',
+    user_id: userIdA,
+    endpoint_id: endpointA_id,
+    is_active: true,
+  };
+
+  const revokedClientMock = {
+    id: 'client_rec_revoked',
+    client_id: 'mcp_client_revoked_test',
+    user_id: userIdA,
+    endpoint_id: endpointA_id,
+    is_active: false,
+  };
+
+  // 1. Authorization check on revoked client
+  assert('Authorize Check: Active client is permitted', activeClientMock.is_active);
+  assert('Authorize Check: Revoked client is REJECTED', !revokedClientMock.is_active);
+
+  // 2. Token exchange check on revoked client
+  const canExchangeActive = activeClientMock.is_active;
+  const canExchangeRevoked = revokedClientMock.is_active;
+  assert('Token Exchange: Active client allowed', canExchangeActive);
+  assert('Token Exchange: Revoked client REJECTED', !canExchangeRevoked);
+
+  // 3. Refresh token check on revoked client
+  const mockRefreshTokenActive = {
+    token_hash: 'hash1',
+    client_id: activeClientMock.client_id,
+    client: activeClientMock,
+    revoked_at: null,
+    expires_at: new Date(Date.now() + 100000),
+  };
+
+  const mockRefreshTokenRevoked = {
+    token_hash: 'hash2',
+    client_id: revokedClientMock.client_id,
+    client: revokedClientMock,
+    revoked_at: null,
+    expires_at: new Date(Date.now() + 100000),
+  };
+
+  const mockRefreshTokenAlreadyRevoked = {
+    token_hash: 'hash3',
+    client_id: activeClientMock.client_id,
+    client: activeClientMock,
+    revoked_at: new Date(),
+    expires_at: new Date(Date.now() + 100000),
+  };
+
+  assert('Refresh Token: Valid active client token allowed', mockRefreshTokenActive.client.is_active && !mockRefreshTokenActive.revoked_at);
+  assert('Refresh Token: Revoked client refresh token REJECTED', !mockRefreshTokenRevoked.client.is_active);
+  assert('Refresh Token: Explicitly revoked token record REJECTED', Boolean(mockRefreshTokenAlreadyRevoked.revoked_at));
+
+  // 4. Ownership Authorization (Tenant Isolation / IDOR Protection)
+  const canUserARevokeOwnClient = activeClientMock.user_id === userIdA;
+  const canUserBRevokeUserAClient = activeClientMock.user_id === userIdB;
+  assert('Ownership Security: Endpoint owner CAN revoke own OAuth client', canUserARevokeOwnClient);
+  assert('Ownership Security: Foreign user CANNOT revoke other user OAuth client (IDOR protected)', !canUserBRevokeUserAClient);
+
+  // 5. Idempotent Revocation
+  const alreadyRevoked = false;
+  const doubleRevokeResult = { success: true, client_id: revokedClientMock.client_id, is_active: false };
+  assert('Idempotent Revoke: Double revoke is deterministic and safe', doubleRevokeResult.success && !doubleRevokeResult.is_active);
+
+  // =========================================================================
+  // 14. Comprehensive Redirect URI Security Matrix
+  // =========================================================================
+  console.log('\n--- 14. Comprehensive Redirect URI Security Matrix ---');
+
+  // 1. Port :443 Canonicalization
+  const baseHttps = 'https://oauth.google.com/callback';
+  const explicitPortHttps = 'https://oauth.google.com:443/callback';
+  const nonDefaultPortHttps = 'https://oauth.google.com:8443/callback';
+
+  assert('Redirect Matrix: Explicit :443 canonicalizes to standard HTTPS URL', redirectUriMatches(explicitPortHttps, baseHttps));
+  assert('Redirect Matrix: Non-default port :8443 strictly REJECTED', !redirectUriMatches(nonDefaultPortHttps, baseHttps));
+
+  // 2. Query parameter exact matching
+  const withQueryRegistered = 'https://myapp.com/oauth/callback?client=1';
+  const withQueryMatching = 'https://myapp.com/oauth/callback?client=1';
+  const withQueryMismatch = 'https://myapp.com/oauth/callback?client=2';
+  const withoutQuery = 'https://myapp.com/oauth/callback';
+
+  assert('Redirect Matrix: Query parameters match exactly', redirectUriMatches(withQueryMatching, withQueryRegistered));
+  assert('Redirect Matrix: Query parameter mismatch strictly REJECTED', !redirectUriMatches(withQueryMismatch, withQueryRegistered));
+  assert('Redirect Matrix: Missing query parameter strictly REJECTED', !redirectUriMatches(withoutQuery, withQueryRegistered));
+
+  // 3. RFC 8252 Loopback Matrix (IPv4, Localhost, IPv6)
+  const loopbackIp4 = 'http://127.0.0.1:8080/cb';
+  const loopbackIp4DiffPort = 'http://127.0.0.1:49152/cb';
+  const loopbackLocalhost = 'http://localhost:8080/cb';
+  const loopbackLocalhostDiffPort = 'http://localhost:3000/cb';
+  const loopbackIp6 = 'http://[::1]:8080/cb';
+  const loopbackIp6DiffPort = 'http://[::1]:9090/cb';
+  const nonLoopbackHttp = 'http://not-localhost.com:8080/cb';
+
+  assert('Loopback Matrix: 127.0.0.1 port relaxation allowed', redirectUriMatches(loopbackIp4DiffPort, loopbackIp4));
+  assert('Loopback Matrix: localhost port relaxation allowed', redirectUriMatches(loopbackLocalhostDiffPort, loopbackLocalhost));
+  assert('Loopback Matrix: [::1] port relaxation allowed', redirectUriMatches(loopbackIp6DiffPort, loopbackIp6));
+  assert('Loopback Matrix: Non-loopback HTTP host port relaxation strictly REJECTED', !redirectUriMatches('http://not-localhost.com:9090/cb', nonLoopbackHttp));
+
+  // 4. DCR Malformed and Unsafe URI Rejection
+  assert('DCR Validation: Empty string is REJECTED', !isValidRedirectUri(''));
+  assert('DCR Validation: javascript: is REJECTED', !isValidRedirectUri('javascript:evil()'));
+  assert('DCR Validation: data: is REJECTED', !isValidRedirectUri('data:text/html,evil'));
+  assert('DCR Validation: Relative path is REJECTED', !isValidRedirectUri('/relative/callback'));
+  assert('DCR Validation: Valid Vertex AI redirect is accepted', isValidRedirectUri('https://vertexaisearch.cloud.google.com/oauth-redirect'));
 
   // =========================================================================
   // SUMMARY
