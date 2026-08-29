@@ -474,8 +474,27 @@ async function runOAuthTests() {
   assert('DCR Validation: Relative path is REJECTED', !isValidRedirectUri('/relative/callback'));
   assert('DCR Validation: Valid Vertex AI redirect is accepted', isValidRedirectUri('https://vertexaisearch.cloud.google.com/oauth-redirect'));
 
-  // 5. Default Google/Gemini Matrix Verification
-  const googleMatrix = [
+  // 5. Default Google/Gemini Matrix & User-Bound URI Verification
+  const userBoundUri = 'https://oauth-redirect.googleusercontent.com/r/user_bound_custom-mcp-102731520205207880268-mcp-gateway-hub-beta_vercel_app';
+  const diffUserUri = 'https://oauth-redirect.googleusercontent.com/r/user_bound_custom-mcp-999999999999999999999-mcp-gateway-hub-beta_vercel_app';
+  const diffDeployUri = 'https://oauth-redirect.googleusercontent.com/r/user_bound_custom-mcp-102731520205207880268-other-app_vercel_app';
+  const evilHostUri = 'https://oauth-redirect.googleusercontent.com.evil.com/r/user_bound_custom-mcp-102731520205207880268-mcp-gateway-hub-beta_vercel_app';
+  const httpSchemeUri = 'http://oauth-redirect.googleusercontent.com/r/user_bound_custom-mcp-102731520205207880268-mcp-gateway-hub-beta_vercel_app';
+  const trailingSlashUri = `${userBoundUri}/`;
+  const queryMismatchUri = `${userBoundUri}?extra=1`;
+  const wrongPathUri = 'https://oauth-redirect.googleusercontent.com/wrong/user_bound_custom-mcp-102731520205207880268-mcp-gateway-hub-beta_vercel_app';
+
+  assert('User-Bound URI: Valid Google redirect URI', isValidRedirectUri(userBoundUri));
+  assert('User-Bound URI: Exact match succeeds when registered', redirectUriMatches(userBoundUri, userBoundUri));
+  assert('User-Bound URI: Different user ID strictly REJECTED', !redirectUriMatches(diffUserUri, userBoundUri));
+  assert('User-Bound URI: Different deployment suffix strictly REJECTED', !redirectUriMatches(diffDeployUri, userBoundUri));
+  assert('User-Bound URI: Altered evil host strictly REJECTED', !redirectUriMatches(evilHostUri, userBoundUri));
+  assert('User-Bound URI: Non-HTTPS scheme strictly REJECTED', !redirectUriMatches(httpSchemeUri, userBoundUri));
+  assert('User-Bound URI: Trailing slash strictly REJECTED', !redirectUriMatches(trailingSlashUri, userBoundUri));
+  assert('User-Bound URI: Unregistered query params strictly REJECTED', !redirectUriMatches(queryMismatchUri, userBoundUri));
+  assert('User-Bound URI: Altered path prefix strictly REJECTED', !redirectUriMatches(wrongPathUri, userBoundUri));
+
+  const standardGoogleMatrix = [
     'https://oauth.google.com/callback',
     'https://antigravity.google/oauth-callback',
     'https://vertexaisearch.cloud.google.com/oauth-redirect',
@@ -483,10 +502,10 @@ async function runOAuthTests() {
     'https://developers.google.com/oauth/callback',
     'http://127.0.0.1:8080/callback',
   ];
-  assert('Google Matrix: All default URIs are syntactically valid', googleMatrix.every(isValidRedirectUri));
-  assert('Google Matrix: Antigravity matches within matrix', googleMatrix.some((reg) => redirectUriMatches('https://antigravity.google/oauth-callback', reg)));
-  assert('Google Matrix: Vertex AI matches within matrix', googleMatrix.some((reg) => redirectUriMatches('https://vertexaisearch.cloud.google.com/oauth-redirect', reg)));
-  assert('Google Matrix: Unregistered evil domain fails matrix match', !googleMatrix.some((reg) => redirectUriMatches('https://evil.com/callback', reg)));
+  assert('Google Matrix: All default URIs are syntactically valid', standardGoogleMatrix.every(isValidRedirectUri));
+  assert('Google Matrix: Antigravity matches within matrix', standardGoogleMatrix.some((reg) => redirectUriMatches('https://antigravity.google/oauth-callback', reg)));
+  assert('Google Matrix: Vertex AI matches within matrix', standardGoogleMatrix.some((reg) => redirectUriMatches('https://vertexaisearch.cloud.google.com/oauth-redirect', reg)));
+  assert('Google Matrix: Unregistered evil domain fails matrix match', !standardGoogleMatrix.some((reg) => redirectUriMatches('https://evil.com/callback', reg)));
 
   // =========================================================================
   // SUMMARY
