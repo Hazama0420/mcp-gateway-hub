@@ -151,6 +151,7 @@ export function EndpointOAuthModal({
         ? parsedUris
         : [
             'https://oauth.google.com/callback',
+            'https://antigravity.google/oauth-callback',
             'https://vertexaisearch.cloud.google.com/oauth-redirect',
             'https://gemini.google.com/oauth/callback',
             'https://developers.google.com/oauth/callback',

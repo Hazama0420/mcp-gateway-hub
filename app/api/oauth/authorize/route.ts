@@ -46,10 +46,20 @@ export async function GET(req: Request) {
   }
 
   if (redirectUri && !client.redirect_uris.some((registered) => redirectUriMatches(redirectUri, registered))) {
-    console.warn('[OAuth Authorize GET] Redirect URI mismatch:', {
+    console.warn('[OAuth Debug GET] Redirect URI mismatch:', {
       client_id: client.client_id,
       requested_redirect_uri: redirectUri,
       registered_redirect_uris: client.redirect_uris,
+    });
+    recordSecurityEvent({
+      eventType: 'AUTH_FAILED',
+      route: '/api/oauth/authorize',
+      reason: 'OAuth redirect_uri mismatch during GET authorize',
+      metadata: {
+        client_id: client.client_id,
+        requested_redirect_uri: redirectUri,
+        registered_redirect_uris: client.redirect_uris,
+      },
     });
     return NextResponse.json(
       {
@@ -161,10 +171,20 @@ export async function POST(req: Request) {
   let finalRedirectUri = redirectUri;
   if (finalRedirectUri) {
     if (!client.redirect_uris.some((registered) => redirectUriMatches(finalRedirectUri, registered))) {
-      console.warn('[OAuth Authorize POST] Redirect URI mismatch:', {
+      console.warn('[OAuth Debug POST] Redirect URI mismatch:', {
         client_id: client.client_id,
         requested_redirect_uri: finalRedirectUri,
         registered_redirect_uris: client.redirect_uris,
+      });
+      recordSecurityEvent({
+        eventType: 'AUTH_FAILED',
+        route: '/api/oauth/authorize',
+        reason: 'OAuth redirect_uri mismatch during POST authorize',
+        metadata: {
+          client_id: client.client_id,
+          requested_redirect_uri: finalRedirectUri,
+          registered_redirect_uris: client.redirect_uris,
+        },
       });
       return NextResponse.json(
         {
@@ -177,6 +197,19 @@ export async function POST(req: Request) {
   } else if (client.redirect_uris.length === 1) {
     finalRedirectUri = client.redirect_uris[0];
   } else {
+    console.warn('[OAuth Debug POST] Missing redirect_uri with multiple registered URIs:', {
+      client_id: client.client_id,
+      registered_redirect_uris: client.redirect_uris,
+    });
+    recordSecurityEvent({
+      eventType: 'AUTH_FAILED',
+      route: '/api/oauth/authorize',
+      reason: 'Missing redirect_uri with multiple registered URIs',
+      metadata: {
+        client_id: client.client_id,
+        registered_redirect_uris: client.redirect_uris,
+      },
+    });
     return NextResponse.json(
       { error: 'invalid_request', error_description: 'redirect_uri must be specified when client has multiple registered URIs' },
       { status: 400 }

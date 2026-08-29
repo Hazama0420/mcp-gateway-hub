@@ -214,6 +214,15 @@ export async function registerOAuthClient(input: RegisterClientInput) {
   };
 }
 
+export const DEFAULT_GOOGLE_GEMINI_REDIRECT_URIS = [
+  'https://oauth.google.com/callback',
+  'https://antigravity.google/oauth-callback',
+  'https://vertexaisearch.cloud.google.com/oauth-redirect',
+  'https://gemini.google.com/oauth/callback',
+  'https://developers.google.com/oauth/callback',
+  'http://127.0.0.1:8080/callback',
+];
+
 /**
  * Creates an endpoint-bound OAuth client manually via Dashboard UI.
  * Returns the plaintext client secret ONCE upon creation.
@@ -236,17 +245,9 @@ export async function createEndpointOAuthClient(params: {
     throw new Error('Endpoint not found or unauthorized');
   }
 
-  const defaultUris = [
-    'https://oauth.google.com/callback',
-    'https://vertexaisearch.cloud.google.com/oauth-redirect',
-    'https://gemini.google.com/oauth/callback',
-    'https://developers.google.com/oauth/callback',
-    'http://127.0.0.1:8080/callback',
-  ];
-
   const rawUris = params.redirectUris && params.redirectUris.length > 0
     ? params.redirectUris
-    : defaultUris;
+    : DEFAULT_GOOGLE_GEMINI_REDIRECT_URIS;
 
   const uris = rawUris
     .map((u) => (typeof u === 'string' ? u.trim() : ''))

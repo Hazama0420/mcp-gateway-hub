@@ -133,8 +133,27 @@ async function runOAuthTests() {
   assert('Redirect URI: Different host strictly rejected', !redirectUriMatches(geminiSparkDiffHost, geminiSparkUri));
   assert('Redirect URI: Different scheme (HTTP vs HTTPS) strictly rejected', !redirectUriMatches(geminiSparkDiffScheme, geminiSparkUri));
 
+  // Antigravity & Vertex AI redirect URI tests
+  const antigravityUri = 'https://antigravity.google/oauth-callback';
+  const antigravityUpperHost = 'https://Antigravity.Google/oauth-callback';
+  const antigravityTrailingSlash = 'https://antigravity.google/oauth-callback/';
+  const antigravityEvilHost = 'https://antigravity.google.evil.example/oauth-callback';
+  const antigravityHttp = 'http://antigravity.google/oauth-callback';
+  const antigravityWrongPath = 'https://antigravity.google/wrong-callback';
+  const antigravityQuery = 'https://antigravity.google/oauth-callback?x=1';
+
+  assert('Redirect URI: Antigravity redirect URL is valid', isValidRedirectUri(antigravityUri));
+  assert('Redirect URI: Exact Antigravity callback URL is matched', redirectUriMatches(antigravityUri, antigravityUri));
+  assert('Redirect URI: Antigravity host case insensitivity preserved', redirectUriMatches(antigravityUpperHost, antigravityUri));
+  assert('Redirect URI: Antigravity trailing slash strictly rejected', !redirectUriMatches(antigravityTrailingSlash, antigravityUri));
+  assert('Redirect URI: Antigravity evil subdomain strictly rejected', !redirectUriMatches(antigravityEvilHost, antigravityUri));
+  assert('Redirect URI: Antigravity HTTP scheme strictly rejected', !redirectUriMatches(antigravityHttp, antigravityUri));
+  assert('Redirect URI: Antigravity wrong path strictly rejected', !redirectUriMatches(antigravityWrongPath, antigravityUri));
+  assert('Redirect URI: Antigravity unregistered query params strictly rejected', !redirectUriMatches(antigravityQuery, antigravityUri));
+
   const vertexUri = 'https://vertexaisearch.cloud.google.com/oauth-redirect';
   assert('Redirect URI: Vertex AI Search redirect URL is valid and matched', isValidRedirectUri(vertexUri) && redirectUriMatches(vertexUri, vertexUri));
+  assert('Redirect URI: Vertex AI trailing slash strictly rejected', !redirectUriMatches('https://vertexaisearch.cloud.google.com/oauth-redirect/', vertexUri));
 
   // =========================================================================
   // 4. PKCE S256 Verification & Rejection of 'plain'
@@ -448,12 +467,26 @@ async function runOAuthTests() {
   assert('Loopback Matrix: [::1] port relaxation allowed', redirectUriMatches(loopbackIp6DiffPort, loopbackIp6));
   assert('Loopback Matrix: Non-loopback HTTP host port relaxation strictly REJECTED', !redirectUriMatches('http://not-localhost.com:9090/cb', nonLoopbackHttp));
 
-  // 4. DCR Malformed and Unsafe URI Rejection
+  // 4. DCR Malformed and Unsafe URI Rejection & Google Matrix
   assert('DCR Validation: Empty string is REJECTED', !isValidRedirectUri(''));
   assert('DCR Validation: javascript: is REJECTED', !isValidRedirectUri('javascript:evil()'));
   assert('DCR Validation: data: is REJECTED', !isValidRedirectUri('data:text/html,evil'));
   assert('DCR Validation: Relative path is REJECTED', !isValidRedirectUri('/relative/callback'));
   assert('DCR Validation: Valid Vertex AI redirect is accepted', isValidRedirectUri('https://vertexaisearch.cloud.google.com/oauth-redirect'));
+
+  // 5. Default Google/Gemini Matrix Verification
+  const googleMatrix = [
+    'https://oauth.google.com/callback',
+    'https://antigravity.google/oauth-callback',
+    'https://vertexaisearch.cloud.google.com/oauth-redirect',
+    'https://gemini.google.com/oauth/callback',
+    'https://developers.google.com/oauth/callback',
+    'http://127.0.0.1:8080/callback',
+  ];
+  assert('Google Matrix: All default URIs are syntactically valid', googleMatrix.every(isValidRedirectUri));
+  assert('Google Matrix: Antigravity matches within matrix', googleMatrix.some((reg) => redirectUriMatches('https://antigravity.google/oauth-callback', reg)));
+  assert('Google Matrix: Vertex AI matches within matrix', googleMatrix.some((reg) => redirectUriMatches('https://vertexaisearch.cloud.google.com/oauth-redirect', reg)));
+  assert('Google Matrix: Unregistered evil domain fails matrix match', !googleMatrix.some((reg) => redirectUriMatches('https://evil.com/callback', reg)));
 
   // =========================================================================
   // SUMMARY
