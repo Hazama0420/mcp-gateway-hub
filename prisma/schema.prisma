@@ -20,6 +20,7 @@ model User {
   created_at    DateTime  @default(now())
 
   endpoints    McpEndpoint[]
+  combos       Combo[]
   integrations Integration[]
   accounts     Account[]
   sessions     Session[]
@@ -42,6 +43,7 @@ model McpEndpoint {
 
   user         User                  @relation(fields: [user_id], references: [id], onDelete: Cascade)
   services     EndpointService[]
+  combo_links  ComboEndpoint[]
   logs         ExecutionLog[]
   integrations EndpointIntegration[]
   oauth_codes  OAuthAuthorizationCode[]
@@ -319,4 +321,37 @@ model OAuthRefreshToken {
   @@index([user_id])
   @@index([endpoint_id])
   @@index([expires_at])
+}
+
+// ============================================
+// COMBO - ADAPTER COMPOSITION LAYER
+// ============================================
+model Combo {
+  id          String   @id @default(uuid())
+  user_id     String
+  name        String
+  description String?
+  is_active   Boolean  @default(true)
+  created_at  DateTime @default(now())
+  updated_at  DateTime @updatedAt
+
+  user        User            @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  endpoints   ComboEndpoint[]
+
+  @@index([user_id])
+  @@index([is_active])
+}
+
+model ComboEndpoint {
+  id          String   @id @default(uuid())
+  combo_id    String
+  endpoint_id String
+  created_at  DateTime @default(now())
+
+  combo    Combo       @relation(fields: [combo_id], references: [id], onDelete: Cascade)
+  endpoint McpEndpoint @relation(fields: [endpoint_id], references: [id], onDelete: Cascade)
+
+  @@unique([combo_id, endpoint_id])
+  @@index([combo_id])
+  @@index([endpoint_id])
 }

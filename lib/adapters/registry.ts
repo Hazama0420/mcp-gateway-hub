@@ -265,3 +265,18 @@ export function calculateEndpointToolCount(services?: Array<{ service_type: stri
   return count;
 }
 
+/**
+ * Dynamically computes total tool count for a Combo given its linked endpoints and services.
+ */
+export function calculateComboToolCount(endpoints?: Array<{ endpoint?: { services?: Array<{ service_type: string }> } }> | null): number {
+  if (!Array.isArray(endpoints)) return 0;
+  let total = 0;
+  for (const item of endpoints) {
+    if (item?.endpoint?.services) {
+      total += calculateEndpointToolCount(item.endpoint.services);
+    }
+  }
+  return total;
+}
+
+

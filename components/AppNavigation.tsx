@@ -8,6 +8,7 @@ import {
   LayoutDashboard,
   Boxes,
   Server,
+  Layers,
   PlaySquare,
   Activity,
   HeartPulse,
@@ -54,6 +55,12 @@ const navGroups: NavGroup[] = [
         href: '/admin/endpoints',
         label: 'MCP Endpoints',
         icon: Server,
+      },
+      {
+        href: '/admin/combo',
+        label: 'Combo',
+        badge: 'NEW',
+        icon: Layers,
       },
       {
         href: '/admin/playground',

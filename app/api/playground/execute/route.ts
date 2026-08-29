@@ -7,7 +7,7 @@ import { safeFetch, validateUrlSyntax, MAX_RESPONSE_BYTES } from '@/lib/security
 import { checkRateLimit, applyRateLimitHeaders, LIMITS } from '@/lib/security/ratelimit';
 import { decryptAuthConfig } from '@/lib/crypto';
 import { recordExecutionLog, recordSecurityEvent, generateExecutionId } from '@/lib/security/audit';
-import { executeEndpointTool } from '@/lib/mcpServer';
+import { executeEndpointTool, executeComboTool } from '@/lib/mcpServer';
 
 export const dynamic = 'force-dynamic';
 
@@ -52,7 +52,64 @@ export async function POST(req: NextRequest) {
     }
 
     const body = await req.json();
-    const { endpointId, toolName, toolId, args } = body;
+    const { endpointId, comboId, toolName, toolId, args } = body;
+
+    // =========================================================================
+    // MODE C: Combo Tool Execution
+    // =========================================================================
+    if (comboId && toolName) {
+      const combo = await prisma.combo.findFirst({
+        where: {
+          id: comboId,
+          user_id: user.id,
+        },
+        include: {
+          endpoints: {
+            include: {
+              endpoint: {
+                include: {
+                  services: true,
+                },
+              },
+            },
+          },
+        },
+      });
+
+      if (!combo) {
+        return NextResponse.json(
+          {
+            success: false,
+            status: 404,
+            statusText: 'NOT_FOUND',
+            latencyMs: Math.round(performance.now() - startTime),
+            error: 'Combo not found or unauthorized',
+          },
+          { status: 404 }
+        );
+      }
+
+      if (!combo.is_active) {
+        return NextResponse.json(
+          {
+            success: false,
+            status: 400,
+            statusText: 'COMBO_INACTIVE',
+            latencyMs: Math.round(performance.now() - startTime),
+            error: 'This Combo is currently paused/inactive. Please enable it in Combo settings.',
+          },
+          { status: 400 }
+        );
+      }
+
+      const execution = await executeComboTool(combo, toolName, args || {}, {
+        source: 'PLAYGROUND',
+      });
+
+      const response = NextResponse.json(execution, { status: execution.status });
+      applyRateLimitHeaders(response, limitResult);
+      return response;
+    }
 
     // =========================================================================
     // MODE B: MCP Endpoint Tool Execution
