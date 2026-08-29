@@ -67,11 +67,12 @@ export function EndpointOAuthModal({
   // Create Client dialog states
   const [isCreatingClient, setIsCreatingClient] = React.useState(false);
   const [newClientName, setNewClientName] = React.useState('Gemini Spark');
-  const [newClientType, setNewClientType] = React.useState<'confidential' | 'public'>('confidential');
-  const [newRedirectUri, setNewRedirectUri] = React.useState('https://oauth.google.com/callback');
+  const [newClientType, setNewClientType] = React.useState<'confidential' | 'public'>('public');
   const [newScope, setNewScope] = React.useState('mcp:read mcp:write');
   const [creatingSubmitting, setCreatingSubmitting] = React.useState(false);
   const [createError, setCreateError] = React.useState<string | null>(null);
+
+  const canonicalRedirectUri = 'https://oauth-redirect.googleusercontent.com/r/user_bound_custom-mcp-102731520205207880268-mcp-gateway-hub-beta_vercel_app';
 
   // Post-Creation One-Time Secret Display
   const [createdClientResult, setCreatedClientResult] = React.useState<{
@@ -141,23 +142,6 @@ export function EndpointOAuthModal({
     setCreateError(null);
     setCreatingSubmitting(true);
 
-    const parsedUris = newRedirectUri
-      .split(/[\n,]+/)
-      .map((u) => u.trim())
-      .filter(Boolean);
-
-    const redirectUris =
-      parsedUris.length > 0
-        ? parsedUris
-        : [
-            'https://oauth.google.com/callback',
-            'https://antigravity.google/oauth-callback',
-            'https://vertexaisearch.cloud.google.com/oauth-redirect',
-            'https://gemini.google.com/oauth/callback',
-            'https://developers.google.com/oauth/callback',
-            'http://127.0.0.1:8080/callback',
-          ];
-
     try {
       const res = await fetch(`/api/endpoints/${endpoint.id}/oauth-clients`, {
         method: 'POST',
@@ -165,7 +149,6 @@ export function EndpointOAuthModal({
         body: JSON.stringify({
           client_name: newClientName.trim(),
           client_type: newClientType,
-          redirect_uris: redirectUris,
           scope: newScope.trim(),
         }),
       });
@@ -514,38 +497,59 @@ export function EndpointOAuthModal({
                     />
                   </div>
 
-                  <div className="grid grid-cols-2 gap-2">
-                    <div className="space-y-1">
-                      <Label className="text-xs font-mono font-bold">Client Type</Label>
-                      <select
-                        value={newClientType}
-                        onChange={(e) => setNewClientType(e.target.value as any)}
-                        className="pop-input h-9 text-xs font-mono font-bold w-full rounded-xl px-2"
-                      >
-                        <option value="confidential">Confidential (Secret)</option>
-                        <option value="public">Public (PKCE S256)</option>
-                      </select>
-                    </div>
-
-                    <div className="space-y-1">
-                      <Label className="text-xs font-mono font-bold">Scopes</Label>
-                      <Input
-                        value={newScope}
-                        onChange={(e) => setNewScope(e.target.value)}
-                        className="pop-input h-9 text-xs font-mono"
-                      />
+                  <div className="space-y-1">
+                    <Label className="text-xs font-mono font-bold">Client Type</Label>
+                    <div className="flex items-center gap-4 pt-1">
+                      <label className="flex items-center gap-2 text-xs font-mono font-bold cursor-pointer">
+                        <input
+                          type="radio"
+                          name="clientType"
+                          value="confidential"
+                          checked={newClientType === 'confidential'}
+                          onChange={() => setNewClientType('confidential')}
+                          className="accent-amber-500 h-4 w-4"
+                        />
+                        <span>Confidential (Secret)</span>
+                      </label>
+                      <label className="flex items-center gap-2 text-xs font-mono font-bold cursor-pointer">
+                        <input
+                          type="radio"
+                          name="clientType"
+                          value="public"
+                          checked={newClientType === 'public'}
+                          onChange={() => setNewClientType('public')}
+                          className="accent-amber-500 h-4 w-4"
+                        />
+                        <span>Public (PKCE S256)</span>
+                      </label>
                     </div>
                   </div>
 
                   <div className="space-y-1">
-                    <Label className="text-xs font-mono font-bold">Redirect URI</Label>
+                    <Label className="text-xs font-mono font-bold">Scopes</Label>
                     <Input
-                      value={newRedirectUri}
-                      onChange={(e) => setNewRedirectUri(e.target.value)}
-                      placeholder="https://oauth.google.com/callback"
+                      value={newScope}
+                      onChange={(e) => setNewScope(e.target.value)}
+                      placeholder="mcp:read mcp:write"
                       className="pop-input h-9 text-xs font-mono"
-                      required
                     />
+                  </div>
+
+                  <div className="space-y-1.5 pt-1">
+                    <div className="flex items-center justify-between">
+                      <Label className="text-xs font-mono font-bold">Redirect URI</Label>
+                      <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300 border border-emerald-500/30">
+                        Automatically managed
+                      </span>
+                    </div>
+                    <Input
+                      value={canonicalRedirectUri}
+                      readOnly
+                      className="pop-input h-9 text-xs font-mono bg-[var(--color-surface-sunken)] cursor-not-allowed opacity-90 select-all"
+                    />
+                    <p className="text-[10px] text-[var(--color-text-muted)] font-mono">
+                      This redirect URI is managed automatically and cannot be edited.
+                    </p>
                   </div>
 
                   <div className="flex justify-end gap-2 pt-2">

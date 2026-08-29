@@ -72,7 +72,7 @@ export async function POST(
       endpointId,
       userId: user.id,
       clientName: client_name || 'Gemini Spark Client',
-      clientType: client_type || 'confidential',
+      clientType: client_type || 'public',
       redirectUris: redirect_uris,
       scope: scope || 'mcp:read mcp:write',
     });

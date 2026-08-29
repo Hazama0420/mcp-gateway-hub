@@ -53,6 +53,44 @@ export function getCanonicalIssuerUrl(reqOrigin?: string | null): string {
 }
 
 /**
+ * Resolves the canonical Google / Gemini Spark custom app redirect URI.
+ * Reads from process.env.GEMINI_OAUTH_REDIRECT_URI or process.env.GOOGLE_CUSTOM_MCP_REDIRECT_URI,
+ * falling back to the canonical deployment user-bound redirect URI.
+ */
+export function getCanonicalGeminiRedirectUri(): string {
+  if (process.env.GEMINI_OAUTH_REDIRECT_URI) {
+    return process.env.GEMINI_OAUTH_REDIRECT_URI.trim();
+  }
+  if (process.env.GOOGLE_CUSTOM_MCP_REDIRECT_URI) {
+    return process.env.GOOGLE_CUSTOM_MCP_REDIRECT_URI.trim();
+  }
+  return 'https://oauth-redirect.googleusercontent.com/r/user_bound_custom-mcp-102731520205207880268-mcp-gateway-hub-beta_vercel_app';
+}
+
+/**
+ * Returns the list of canonical managed redirect URIs for Gemini/Google MCP integration.
+ * The primary canonical URI is always the user-bound custom MCP redirect URI.
+ * Generic 'https://oauth.google.com/callback' is intentionally excluded.
+ */
+export function getManagedEndpointRedirectUris(): string[] {
+  const primary = getCanonicalGeminiRedirectUri();
+  const list = [primary];
+  const additional = [
+    'https://antigravity.google/oauth-callback',
+    'https://vertexaisearch.cloud.google.com/oauth-redirect',
+    'https://gemini.google.com/oauth/callback',
+    'https://developers.google.com/oauth/callback',
+    'http://127.0.0.1:8080/callback',
+  ];
+  for (const uri of additional) {
+    if (!list.includes(uri)) {
+      list.push(uri);
+    }
+  }
+  return list;
+}
+
+/**
  * Returns the canonical MCP resource URL for a given endpoint.
  * Format: https://<domain>/api/mcp/<endpoint-id>/http
  */

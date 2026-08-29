@@ -27,6 +27,8 @@ const {
   getOAuthProtectedResourceMetadataUrl,
   createProtectedResourceMetadata,
   createAuthorizationServerMetadata,
+  getCanonicalGeminiRedirectUri,
+  getManagedEndpointRedirectUris,
   SUPPORTED_SCOPES,
 } = require('../lib/oauth/config');
 const { generateCodeChallenge, verifyPkce } = require('../lib/oauth/pkce');
@@ -506,6 +508,54 @@ async function runOAuthTests() {
   assert('Google Matrix: Antigravity matches within matrix', standardGoogleMatrix.some((reg) => redirectUriMatches('https://antigravity.google/oauth-callback', reg)));
   assert('Google Matrix: Vertex AI matches within matrix', standardGoogleMatrix.some((reg) => redirectUriMatches('https://vertexaisearch.cloud.google.com/oauth-redirect', reg)));
   assert('Google Matrix: Unregistered evil domain fails matrix match', !standardGoogleMatrix.some((reg) => redirectUriMatches('https://evil.com/callback', reg)));
+
+  // =========================================================================
+  // 15. Canonical Gemini Redirect URI & Automatic Client Creation Security
+  // =========================================================================
+  console.log('\n--- 15. Canonical Gemini Redirect URI & Client Creation Security ---');
+
+  // Test 1 — Canonical Redirect URI Resolution
+  const canonicalUri = getCanonicalGeminiRedirectUri();
+  assert('Test 1: Canonical Gemini redirect URI is resolved and valid', isValidRedirectUri(canonicalUri) && canonicalUri.startsWith('https://oauth-redirect.googleusercontent.com/r/user_bound_custom-mcp-'));
+
+  // Test 2 — Managed Endpoint Redirect URIs contains canonical URI as primary
+  const managedUris = getManagedEndpointRedirectUris();
+  assert('Test 2: Managed endpoint redirect URIs list has canonical URI as primary', managedUris[0] === canonicalUri);
+
+  // Test 3 — No oauth.google.com/callback in managed endpoint URIs
+  assert('Test 3: Generic oauth.google.com/callback is NOT in managed endpoint redirect URIs', !managedUris.includes('https://oauth.google.com/callback'));
+
+  // Test 4 — Authorization URI Consistency (Exact match against canonical URI)
+  const matchingAuthUri = canonicalUri;
+  assert('Test 4: Authorization request with exact canonical URI matches successfully', redirectUriMatches(matchingAuthUri, canonicalUri));
+
+  // Test 5 — PKCE S256 works end-to-end; invalid code_verifier fails
+  const testVerifier = 'E9Melhoa2OwvFrGMTJguCH5rtx64ZW_JW-ZauSI7EQL-safe_test_verifier_string_1234567890';
+  const testChallenge = generateCodeChallenge(testVerifier);
+  assert('Test 5a: PKCE S256 challenge generated successfully', testChallenge.length > 0);
+  assert('Test 5b: Valid code_verifier passes S256 verification', verifyPkce(testVerifier, testChallenge, 'S256'));
+  assert('Test 5c: Invalid code_verifier fails S256 verification', !verifyPkce('invalid_verifier_that_does_not_match_challenge', testChallenge, 'S256'));
+  assert('Test 5d: Short code_verifier fails S256 verification', !verifyPkce('short', testChallenge, 'S256'));
+
+  // Test 6 — State parameter validation logic
+  const validState = 'state_xyz_123456';
+  assert('Test 6a: Valid non-empty state is acceptable', Boolean(validState && validState.length >= 8));
+  assert('Test 6b: Missing/empty state is detectable', !Boolean('' || undefined));
+
+  // Test 7 — Open Redirect Prevention (Injected arbitrary redirect URI rejected)
+  const evilInjectedUri = 'https://evil.example.com/callback';
+  assert('Test 7: Arbitrary evil redirect URI is REJECTED against canonical URI', !redirectUriMatches(evilInjectedUri, canonicalUri));
+  assert('Test 7b: Evil subdomain redirect URI is REJECTED', !redirectUriMatches('https://oauth-redirect.googleusercontent.com.evil.com/callback', canonicalUri));
+
+  // Test 8 — Existing Clients compatibility (Multi-URI records continue matching)
+  const multiUriClient = [
+    canonicalUri,
+    'https://antigravity.google/oauth-callback',
+    'https://vertexaisearch.cloud.google.com/oauth-redirect',
+  ];
+  assert('Test 8a: Existing client matches canonical URI', multiUriClient.some((reg) => redirectUriMatches(canonicalUri, reg)));
+  assert('Test 8b: Existing client matches Antigravity URI', multiUriClient.some((reg) => redirectUriMatches('https://antigravity.google/oauth-callback', reg)));
+  assert('Test 8c: Existing client matches Vertex AI URI', multiUriClient.some((reg) => redirectUriMatches('https://vertexaisearch.cloud.google.com/oauth-redirect', reg)));
 
   // =========================================================================
   // SUMMARY

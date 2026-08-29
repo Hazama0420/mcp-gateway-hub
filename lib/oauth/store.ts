@@ -37,6 +37,14 @@ function getJwtHelper() {
   }
 }
 
+function getConfigHelper() {
+  try {
+    return require('./config');
+  } catch {
+    return null;
+  }
+}
+
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
 
 /**
@@ -214,17 +222,9 @@ export async function registerOAuthClient(input: RegisterClientInput) {
   };
 }
 
-export const DEFAULT_GOOGLE_GEMINI_REDIRECT_URIS = [
-  'https://oauth.google.com/callback',
-  'https://antigravity.google/oauth-callback',
-  'https://vertexaisearch.cloud.google.com/oauth-redirect',
-  'https://gemini.google.com/oauth/callback',
-  'https://developers.google.com/oauth/callback',
-  'http://127.0.0.1:8080/callback',
-];
-
 /**
- * Creates an endpoint-bound OAuth client manually via Dashboard UI.
+ * Creates an endpoint-bound OAuth client manually via Dashboard UI or API.
+ * Automatically resolves and persists canonical managed redirect URIs.
  * Returns the plaintext client secret ONCE upon creation.
  */
 export async function createEndpointOAuthClient(params: {
@@ -245,18 +245,41 @@ export async function createEndpointOAuthClient(params: {
     throw new Error('Endpoint not found or unauthorized');
   }
 
-  const rawUris = params.redirectUris && params.redirectUris.length > 0
-    ? params.redirectUris
-    : DEFAULT_GOOGLE_GEMINI_REDIRECT_URIS;
+  // Server is authoritative: resolve canonical managed redirect URIs
+  const configHelper = getConfigHelper();
+  const managedUris: string[] = configHelper?.getManagedEndpointRedirectUris
+    ? configHelper.getManagedEndpointRedirectUris()
+    : [
+        'https://oauth-redirect.googleusercontent.com/r/user_bound_custom-mcp-102731520205207880268-mcp-gateway-hub-beta_vercel_app',
+        'https://antigravity.google/oauth-callback',
+        'https://vertexaisearch.cloud.google.com/oauth-redirect',
+        'https://gemini.google.com/oauth/callback',
+        'https://developers.google.com/oauth/callback',
+        'http://127.0.0.1:8080/callback',
+      ];
 
-  const uris = rawUris
-    .map((u) => (typeof u === 'string' ? u.trim() : ''))
-    .filter(Boolean);
+  const canonicalUri: string = configHelper?.getCanonicalGeminiRedirectUri
+    ? configHelper.getCanonicalGeminiRedirectUri()
+    : 'https://oauth-redirect.googleusercontent.com/r/user_bound_custom-mcp-102731520205207880268-mcp-gateway-hub-beta_vercel_app';
 
-  for (const uri of uris) {
-    if (!isValidRedirectUri(uri)) {
-      throw new Error(`Invalid redirect_uri: ${uri}`);
+  let uris: string[];
+
+  if (params.redirectUris && params.redirectUris.length > 0) {
+    // If specific redirect URIs are passed, strictly validate each
+    const rawUris = params.redirectUris
+      .map((u) => (typeof u === 'string' ? u.trim() : ''))
+      .filter(Boolean);
+
+    for (const uri of rawUris) {
+      if (!isValidRedirectUri(uri)) {
+        throw new Error(`Invalid redirect_uri: ${uri}`);
+      }
     }
+
+    // Always include the canonical Gemini redirect URI as primary
+    uris = Array.from(new Set([canonicalUri, ...rawUris]));
+  } else {
+    uris = managedUris;
   }
 
   const isPublic = params.clientType === 'public';
