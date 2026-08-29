@@ -134,6 +134,7 @@ export async function createMcpServer(endpoint: any, options?: { source?: 'MCP' 
   return server;
 }
 
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const origin = req.headers.origin as string | undefined;
   const corsHeaders = getMcpCorsHeaders(origin);

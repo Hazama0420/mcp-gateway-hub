@@ -242,3 +242,26 @@ export function formatUserIntegrationAsService(integration: any): ServiceDefinit
     isCustom: true,
   };
 }
+
+/**
+ * Dynamically computes total tool count for a list of attached services based on registry definitions.
+ */
+export function calculateEndpointToolCount(services?: Array<{ service_type: string }> | null): number {
+  if (!Array.isArray(services)) return 0;
+  const serviceTypes = new Set(
+    services.map((s) => s.service_type.toLowerCase())
+  );
+
+  let count = 0;
+  for (const svc of BUILTIN_SERVICES) {
+    const sType = svc.serviceType.toLowerCase();
+    if (
+      serviceTypes.has(sType) ||
+      (sType === 'postgres' && (serviceTypes.has('postgresql') || serviceTypes.has('neon') || serviceTypes.has('supabase')))
+    ) {
+      count += svc.toolsCount || (svc.tools ? svc.tools.length : 0);
+    }
+  }
+  return count;
+}
+

@@ -2,15 +2,110 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 import { z } from 'zod';
-import { createMcpServer } from '@/pages/api/mcp/[id]/http';
-
-export { createMcpServer };
+import { decrypt } from './crypto';
+import { recordExecutionLog, generateExecutionId } from './security/audit';
+import { registerTools as registerGithub } from './adapters/github';
+import { registerTools as registerPostgres } from './adapters/postgres';
+import { registerTools as registerVercel } from './adapters/vercel';
 
 export interface EndpointToolDefinition {
   name: string;
   description: string;
   service_type: string;
   input_schema: Record<string, any>;
+}
+
+export async function createMcpServer(endpoint: any, options?: { source?: 'MCP' | 'PLAYGROUND' }) {
+  const source = options?.source || 'MCP';
+
+  const server = new McpServer({
+    name: 'MCP Gateway Hub',
+    version: '1.0.0',
+  });
+
+  // Centralized Tool Execution Audit Wrapper
+  const originalTool = server.tool.bind(server);
+  server.tool = ((name: string, ...rest: any[]) => {
+    const callback = rest[rest.length - 1];
+    if (typeof callback === 'function') {
+      rest[rest.length - 1] = async (...args: any[]) => {
+        const startTime = performance.now();
+        const executionId = generateExecutionId();
+        try {
+          const result = await callback(...args);
+          const executionTimeMs = Math.round(performance.now() - startTime);
+          const isError = Boolean(result && typeof result === 'object' && result.isError);
+
+          let resultSize: number | null = null;
+          if (result && Array.isArray(result.content)) {
+            resultSize = result.content.reduce((acc: number, item: any) => acc + (item.text?.length || 0), 0);
+          }
+
+          // Non-blocking asynchronous audit log
+          recordExecutionLog({
+            executionId,
+            endpointId: endpoint.id,
+            userId: endpoint.user_id,
+            toolName: name,
+            source,
+            status: isError ? 'FAILED' : 'SUCCESS',
+            errorCategory: isError ? 'EXTERNAL_API' : null,
+            executionTimeMs,
+            resultSize,
+            metadata: {
+              adapter: name.split('_')[0] || 'mcp',
+            },
+          });
+
+          return result;
+        } catch (err: any) {
+          const executionTimeMs = Math.round(performance.now() - startTime);
+          recordExecutionLog({
+            executionId,
+            endpointId: endpoint.id,
+            userId: endpoint.user_id,
+            toolName: name,
+            source,
+            status: 'FAILED',
+            errorCategory: 'INTERNAL',
+            executionTimeMs,
+            metadata: {
+              error_type: err?.name || 'Error',
+            },
+          });
+          throw err;
+        }
+      };
+    }
+    return (originalTool as any)(name, ...rest);
+  }) as any;
+
+  if (Array.isArray(endpoint.services)) {
+    for (const service of endpoint.services) {
+      try {
+        const decryptedJson = decrypt(service.encrypted_config, service.iv, service.tag);
+        const config = JSON.parse(decryptedJson);
+
+        switch (service.service_type) {
+          case 'github':
+            registerGithub(server, { token: config.token });
+            break;
+          case 'supabase':
+          case 'postgres':
+          case 'postgresql':
+            registerPostgres(server, { connectionString: config.connectionString });
+            break;
+          case 'vercel':
+            registerVercel(server, { token: config.token, teamId: config.teamId });
+            break;
+        }
+      } catch (error) {
+        console.error('[HTTP] Error registering service:', service.service_type, error);
+      }
+    }
+  }
+
+  return server;
 }
 
 export async function getEndpointTools(endpoint: any): Promise<EndpointToolDefinition[]> {
@@ -26,7 +121,6 @@ export async function getEndpointTools(endpoint: any): Promise<EndpointToolDefin
         if (toolObj.inputSchema instanceof z.ZodType) {
           schemaJson = (zodToJsonSchema(toolObj.inputSchema) as any) || { properties: {} };
         } else if (typeof toolObj.inputSchema === 'object') {
-          // If shape object, wrap in z.object
           try {
             schemaJson = (zodToJsonSchema(z.object(toolObj.inputSchema)) as any) || { properties: {} };
           } catch {
