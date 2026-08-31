@@ -43,18 +43,20 @@ function resolveIssuer(reqOrigin?: string | null): string {
     if (normalized) return normalized;
   }
 
-  if (process.env.VERCEL_URL) {
-    return `https://${process.env.VERCEL_URL}`;
-  }
-
   if (reqOrigin) {
     const normalized = normalizeOriginSafe(reqOrigin);
     if (normalized) return normalized;
   }
 
-  return process.env.NODE_ENV === 'production'
-    ? 'https://mcp-gateway-hub-beta.vercel.app'
-    : 'http://localhost:3000';
+  if (process.env.NODE_ENV === 'production') {
+    return 'https://mcp-gateway-hub-beta.vercel.app';
+  }
+
+  if (process.env.VERCEL_URL) {
+    return `https://${process.env.VERCEL_URL}`;
+  }
+
+  return 'http://localhost:3000';
 }
 
 function resolveResourceUrl(endpointId: string, reqOrigin?: string | null): string {

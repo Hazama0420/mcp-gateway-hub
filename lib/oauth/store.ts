@@ -1,18 +1,20 @@
-// lib/oauth/store.ts
 import * as crypto from 'node:crypto';
 import bcrypt from 'bcryptjs';
+import { createRequire } from 'node:module';
+
+const req = typeof require !== 'undefined' ? require : createRequire(import.meta.url);
 
 let prismaInstance: any = null;
 
 function getPrismaClient() {
   if (!prismaInstance) {
     try {
-      const mod = require('../prisma');
-      prismaInstance = mod.default || mod.prisma || mod;
+      const { PrismaClient } = req('@prisma/client');
+      prismaInstance = new PrismaClient();
     } catch {
       try {
-        const { PrismaClient } = require('@prisma/client');
-        prismaInstance = new PrismaClient();
+        const mod = req('../prisma');
+        prismaInstance = mod.default || mod.prisma || mod;
       } catch {
         prismaInstance = null;
       }
@@ -23,7 +25,7 @@ function getPrismaClient() {
 
 function getPkceHelper() {
   try {
-    return require('./pkce');
+    return req('./pkce');
   } catch {
     return null;
   }
@@ -31,7 +33,7 @@ function getPkceHelper() {
 
 function getJwtHelper() {
   try {
-    return require('./jwt');
+    return req('./jwt');
   } catch {
     return null;
   }
@@ -39,7 +41,7 @@ function getJwtHelper() {
 
 function getConfigHelper() {
   try {
-    return require('./config');
+    return req('./config');
   } catch {
     return null;
   }

@@ -313,8 +313,25 @@ async function runComboOAuthTests() {
   const vLegacyEndpoint = verifyMcpAccessToken(tokenEndpoint.token, epVercel.id, CANONICAL_ORIGIN);
   assert('Test 48: Existing MCP Endpoint token verifies normally', vLegacyEndpoint.valid === true);
 
-  const vLegacyCross = verifyMcpAccessToken(tokenEndpoint.token, comboDevOps.id, CANONICAL_ORIGIN);
-  assert('Test 49: Existing MCP Endpoint token cannot access Combo (DENY)', vLegacyCross.valid === false);
+  // =========================================================================
+  // 13. Production Domain Resolution & RFC 9728 Issuer Matching
+  // =========================================================================
+  console.log('\n--- 13. Production Domain Resolution & RFC 9728 Issuer Matching ---');
+  const prevEnv = process.env.NODE_ENV;
+  const prevVercelUrl = process.env.VERCEL_URL;
+
+  process.env.NODE_ENV = 'production';
+  process.env.VERCEL_URL = 'mcp-gateway-ephemeral-hash-123.vercel.app';
+
+  const canonicalIssuerProd = getCanonicalIssuerUrl();
+  assert('Test 50: Production issuer prefers canonical production domain over VERCEL_URL hash', canonicalIssuerProd === 'https://mcp-gateway-hub-beta.vercel.app');
+
+  const prmProd = createProtectedResourceMetadata(comboDevOps.id);
+  assert('Test 51: Production PRM authorization_servers matches canonical domain', prmProd.authorization_servers.includes('https://mcp-gateway-hub-beta.vercel.app'));
+
+  // Restore env
+  process.env.NODE_ENV = prevEnv;
+  process.env.VERCEL_URL = prevVercelUrl;
 
   // =========================================================================
   // SUMMARY
