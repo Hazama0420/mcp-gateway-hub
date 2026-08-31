@@ -338,6 +338,52 @@ async function runE2EValidation() {
   assert('Gemini Flow 8: Legacy API key continues to work without regression', isLegacyKeyStillValid);
 
   // =========================================================================
+  // SCENARIO 12: Combo MCP OAuth 2.1 & Gemini Spark Full Discovery Handshake
+  // =========================================================================
+  console.log('\n--- SCENARIO 12: Combo MCP OAuth 2.1 & Gemini Spark Interoperability ---');
+
+  process.env.NEXTAUTH_URL = 'https://mcp-gateway-hub-beta.vercel.app';
+  const canonicalIssuer = 'https://mcp-gateway-hub-beta.vercel.app';
+  const comboId = 'combo-live-devops-456';
+  const comboUserId = tenantUserA.id;
+  const comboClientId = 'mcp_client_gemini_combo_devops';
+
+  // 1. Combo unauthenticated discovery probe -> 401 + WWW-Authenticate header
+  const comboPrmUrl = getOAuthProtectedResourceMetadataUrl(comboId, canonicalIssuer, { isCombo: true });
+  assert('Combo Gemini Flow 1: PRM URL uses /api/mcp/combo/<combo-id>/http path', comboPrmUrl === `${canonicalIssuer}/.well-known/oauth-protected-resource/api/mcp/combo/${comboId}/http`);
+
+  const comboWwwAuth = `Bearer resource_metadata="${comboPrmUrl}"`;
+  assert('Combo Gemini Flow 2: 401 WWW-Authenticate header advertises combo resource metadata', comboWwwAuth.includes(comboPrmUrl) && !comboWwwAuth.includes('error='));
+
+  // 2. Discover Protected Resource Metadata for Combo
+  const comboMetadata = createProtectedResourceMetadata(comboId, canonicalIssuer, { isCombo: true });
+  assert('Combo Gemini Flow 3: Protected Resource Metadata resource matches canonical combo URL', comboMetadata.resource === `${canonicalIssuer}/api/mcp/combo/${comboId}/http`);
+  assert('Combo Gemini Flow 4: Protected Resource Metadata contains authorization_servers', comboMetadata.authorization_servers.includes(canonicalIssuer));
+
+  // 3. Issue and verify Combo OAuth token
+  const { token: comboAccessToken } = signMcpAccessToken({
+    userId: comboUserId,
+    comboId: comboId,
+    clientId: comboClientId,
+    scope: 'mcp:read mcp:write',
+    expiresInSeconds: 3600,
+    reqOrigin: canonicalIssuer,
+  });
+
+  assert('Combo Gemini Flow 5: Combo token recognized as JWT', isJwtToken(comboAccessToken));
+
+  const comboTokenVerification = verifyMcpAccessToken(comboAccessToken, comboId, canonicalIssuer);
+  assert('Combo Gemini Flow 6: Token valid on target Combo endpoint with matching aud and sub', comboTokenVerification.valid && comboTokenVerification.payload.sub === comboUserId && comboTokenVerification.payload.aud === `${canonicalIssuer}/api/mcp/combo/${comboId}/http`);
+
+  // 4. Isolation: Cross-combo token rejection
+  const otherComboVerify = verifyMcpAccessToken(comboAccessToken, 'combo-other-789', canonicalIssuer);
+  assert('Combo Gemini Flow 7: Combo token rejected on different combo', !otherComboVerify.valid);
+
+  // 5. Isolation: Combo token cannot directly query standalone endpoint
+  const standaloneVerify = verifyMcpAccessToken(comboAccessToken, geminiEndpointId, canonicalIssuer);
+  assert('Combo Gemini Flow 8: Combo token rejected on standalone endpoint', !standaloneVerify.valid);
+
+  // =========================================================================
   // SUMMARY
   // =========================================================================
   console.log('\n================================================================');

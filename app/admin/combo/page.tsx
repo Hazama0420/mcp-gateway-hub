@@ -147,7 +147,12 @@ export default function ComboPage() {
     }
   };
 
-  const origin = typeof window !== 'undefined' ? window.location.origin : 'https://mcp-gateway-hub-beta.vercel.app';
+  const origin =
+    typeof window !== 'undefined'
+      ? (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+          ? window.location.origin
+          : (process.env.NEXT_PUBLIC_APP_URL || 'https://mcp-gateway-hub-beta.vercel.app'))
+      : 'https://mcp-gateway-hub-beta.vercel.app';
 
   const filteredCombos = combos.filter((c) => {
     const q = searchQuery.toLowerCase().trim();

@@ -110,7 +110,12 @@ export function ComboOAuthModal({
     setTimeout(() => setCopiedKey(null), 2000);
   };
 
-  const origin = typeof window !== 'undefined' ? window.location.origin : 'https://mcp-gateway-hub-beta.vercel.app';
+  const origin =
+    typeof window !== 'undefined'
+      ? (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+          ? window.location.origin
+          : (process.env.NEXT_PUBLIC_APP_URL || 'https://mcp-gateway-hub-beta.vercel.app'))
+      : 'https://mcp-gateway-hub-beta.vercel.app';
   const mcpServerUrl = combo ? `${origin}/api/mcp/combo/${combo.id}/http` : '';
   const authorizationUrl = `${origin}/oauth/authorize`;
   const tokenUrl = `${origin}/oauth/token`;

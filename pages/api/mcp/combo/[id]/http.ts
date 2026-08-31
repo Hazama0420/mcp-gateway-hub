@@ -12,6 +12,7 @@ import { getMcpCorsHeaders, applyCorsHeaders } from '@/lib/security/cors';
 import { recordExecutionLog, recordSecurityEvent, generateExecutionId } from '@/lib/security/audit';
 import { isJwtToken, verifyMcpAccessToken } from '@/lib/oauth/jwt';
 import { getOAuthProtectedResourceMetadataUrl } from '@/lib/oauth/config';
+import { hashOpaqueToken } from '@/lib/oauth/store';
 
 import { registerTools as registerGithub } from '@/lib/adapters/github';
 import { registerTools as registerPostgres } from '@/lib/adapters/postgres';
@@ -158,23 +159,92 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   const ip = req.socket?.remoteAddress || req.headers['x-forwarded-for'] || 'unknown';
+
+  // Rate Limit & Auth Helper: Pre-Auth (Brute force protection on failed/unauthenticated probes)
   const authLimitIdentifier = `mcp_auth:combo:${id}:${ip}`;
+  const resourceMetadataUrl = getOAuthProtectedResourceMetadataUrl(id as string, origin, { isCombo: true });
 
-  const preAuthRateLimit = await checkRateLimit(authLimitIdentifier, LIMITS.MCP_AUTH_FAILURE);
-  applyRateLimitHeaders(res, preAuthRateLimit);
+  const buildWwwAuthHeader = (errorCode?: string, errorDescription?: string) => {
+    if (errorCode && errorDescription) {
+      return `Bearer error="${errorCode}", error_description="${errorDescription}", resource_metadata="${resourceMetadataUrl}"`;
+    }
+    return `Bearer resource_metadata="${resourceMetadataUrl}"`;
+  };
 
-  if (!preAuthRateLimit.success) {
-    recordSecurityEvent({
-      eventType: 'RATE_LIMITED',
-      endpointId: id as string,
-      clientIp: String(ip),
-      origin,
-      metadata: { reason: 'Pre-auth rate limit exceeded on combo', limitType: 'MCP_AUTH_FAILURE' },
+  const handleAuthFailure = async (
+    status: number,
+    errorMsg: string,
+    errorCode?: string,
+    reason?: string,
+    eventType: string = 'AUTH_FAILED',
+    metadata?: Record<string, any>
+  ) => {
+    const authLimitResult = await checkRateLimit(authLimitIdentifier, LIMITS.MCP_AUTH);
+    applyRateLimitHeaders(res, authLimitResult);
+
+    if (!authLimitResult.success) {
+      recordSecurityEvent({
+        eventType: 'RATE_LIMITED',
+        endpointId: id as string,
+        route: '/api/mcp/combo/[id]/http',
+        ip: String(ip),
+        reason: 'Pre-auth rate limit exceeded on combo',
+      });
+      return res.status(429).json({ error: 'Too many requests' });
+    }
+
+    res.setHeader('WWW-Authenticate', buildWwwAuthHeader(errorCode, errorMsg));
+    if (eventType === 'OAUTH_TOKEN_REJECTED') {
+      recordSecurityEvent({
+        eventType: 'OAUTH_TOKEN_REJECTED',
+        endpointId: id as string,
+        route: '/api/mcp/combo/[id]/http',
+        ip: String(ip),
+        reason: reason || errorMsg,
+        metadata: { ...metadata, combo_id: id as string },
+      });
+    } else if (eventType === 'TENANT_ACCESS_DENIED') {
+      recordSecurityEvent({
+        eventType: 'TENANT_ACCESS_DENIED',
+        endpointId: id as string,
+        route: '/api/mcp/combo/[id]/http',
+        ip: String(ip),
+        reason: reason || errorMsg,
+        metadata: { ...metadata, combo_id: id as string },
+      });
+    } else {
+      recordSecurityEvent({
+        eventType: 'AUTH_FAILED',
+        endpointId: id as string,
+        route: '/api/mcp/combo/[id]/http',
+        ip: String(ip),
+        reason: reason || errorMsg,
+        metadata: { ...metadata, combo_id: id as string },
+      });
+    }
+    return res.status(status).json({
+      error: status === 403 ? 'Forbidden' : 'Unauthorized',
+      message: errorMsg,
     });
-    return res.status(429).json({ error: 'Too Many Requests: Rate limit exceeded. Try again later.' });
+  };
+
+  // 1. Extract Authorization header
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return handleAuthFailure(
+      401,
+      'Bearer token required. Discover OAuth metadata via WWW-Authenticate header.',
+      undefined,
+      'Missing or malformed Bearer header'
+    );
   }
 
-  // Retrieve Combo and its attached endpoints
+  const token = authHeader.substring(7).trim();
+  if (!token) {
+    return handleAuthFailure(401, 'Empty Bearer token', 'invalid_token', 'Empty Bearer token');
+  }
+
+  // 2. Fetch Combo and its attached endpoints
   const combo = await prisma.combo.findUnique({
     where: { id: id as string },
     include: {
@@ -191,197 +261,202 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     },
   });
 
-  if (!combo) {
-    return res.status(404).json({ error: 'Combo not found' });
+  if (!combo || !combo.is_active) {
+    return handleAuthFailure(401, 'Combo not found or inactive', 'invalid_token', 'Combo not found or inactive');
   }
 
-  if (!combo.is_active) {
-    return res.status(400).json({ error: 'Combo is inactive/disabled.' });
-  }
-
-  // Authentication & Authorization check
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    const resourceMetadataUrl = getOAuthProtectedResourceMetadataUrl(id as string, req.headers.host);
-    res.setHeader('WWW-Authenticate', `Bearer error="invalid_token", error_description="Bearer token required", resource_metadata="${resourceMetadataUrl}"`);
-
-    recordSecurityEvent({
-      eventType: 'AUTH_FAILED',
-      endpointId: id as string,
-      userId: combo.user_id,
-      clientIp: String(ip),
-      origin,
-      metadata: { reason: 'Missing or malformed Authorization header on combo' },
-    });
-
-    return res.status(401).json({
-      error: 'Unauthorized: Bearer token is missing.',
-      resource_metadata: resourceMetadataUrl,
-    });
-  }
-
-  const token = authHeader.replace(/^Bearer\s+/i, '').trim();
-  let authSuccess = false;
+  // 3. Classify and verify token (OAuth JWT vs Legacy API Key)
+  const isOAuth = isJwtToken(token);
   let authenticatedUserId = combo.user_id;
 
-  if (isJwtToken(token)) {
-    const protocol = req.headers['x-forwarded-proto'] || (req.headers.host?.includes('localhost') ? 'http' : 'https');
-    const reqOrigin = `${protocol}://${req.headers.host}`;
-
-    // Verify token: bound to this combo or user
-    const jwtResult = verifyMcpAccessToken(token, id as string, reqOrigin);
-    if (jwtResult.valid && jwtResult.payload) {
-      if (jwtResult.payload.sub === combo.user_id) {
-        authSuccess = true;
-        authenticatedUserId = jwtResult.payload.sub;
-      }
-    } else {
-      // Also accept tokens signed for user's endpoints if owner matches
-      const broadJwt = verifyMcpAccessToken(token, undefined, reqOrigin);
-      if (broadJwt.valid && broadJwt.payload && broadJwt.payload.sub === combo.user_id) {
-        authSuccess = true;
-        authenticatedUserId = broadJwt.payload.sub;
-      }
+  if (isOAuth) {
+    const verifyResult = verifyMcpAccessToken(token, id as string, origin, { isCombo: true });
+    if (!verifyResult.valid || !verifyResult.payload) {
+      return handleAuthFailure(
+        401,
+        verifyResult.error || 'Invalid OAuth access token',
+        'invalid_token',
+        verifyResult.error,
+        'OAUTH_TOKEN_REJECTED'
+      );
     }
+
+    // Enforce Tenant Isolation
+    if (verifyResult.payload.sub !== combo.user_id) {
+      return handleAuthFailure(
+        403,
+        'Cross-tenant access forbidden',
+        'insufficient_scope',
+        'Cross-tenant OAuth token reuse attempted',
+        'TENANT_ACCESS_DENIED',
+        { token_sub: verifyResult.payload.sub, combo_owner: combo.user_id }
+      );
+    }
+
+    authenticatedUserId = verifyResult.payload.sub;
   } else {
-    // Check against user's active API keys on any attached endpoint
+    // Check against active API keys on any attached endpoint
+    let isApiKeyValid = false;
     for (const link of combo.endpoints) {
       if (link.endpoint?.api_key_hash) {
         const isMatch = await bcrypt.compare(token, link.endpoint.api_key_hash);
         if (isMatch) {
-          authSuccess = true;
+          isApiKeyValid = true;
           break;
         }
       }
     }
+
+    if (!isApiKeyValid) {
+      return handleAuthFailure(
+        401,
+        'Invalid API key credentials for combo',
+        'invalid_token',
+        'Invalid API key credentials for combo'
+      );
+    }
   }
 
-  if (!authSuccess) {
-    const resourceMetadataUrl = getOAuthProtectedResourceMetadataUrl(id as string, req.headers.host);
-    res.setHeader('WWW-Authenticate', `Bearer error="invalid_token", error_description="Invalid or expired Bearer token", resource_metadata="${resourceMetadataUrl}"`);
-
-    recordSecurityEvent({
-      eventType: 'AUTH_FAILED',
-      endpointId: id as string,
-      userId: combo.user_id,
-      clientIp: String(ip),
-      origin,
-      metadata: { reason: 'Invalid API key or JWT token for combo' },
-    });
-
-    return res.status(401).json({
-      error: 'Unauthorized: Invalid token or API key.',
-      resource_metadata: resourceMetadataUrl,
-    });
-  }
-
-  // Request Rate Limiting
+  // Rate Limit: Valid Request (Post-Auth quota)
   const reqLimitIdentifier = `mcp_req:combo:${id}:${authenticatedUserId}`;
-  const reqRateLimit = await checkRateLimit(reqLimitIdentifier, LIMITS.MCP_REQUEST);
-  applyRateLimitHeaders(res, reqRateLimit);
+  const reqLimitResult = await checkRateLimit(reqLimitIdentifier, LIMITS.MCP_REQUEST);
 
-  if (!reqRateLimit.success) {
+  if (!reqLimitResult.success) {
     recordSecurityEvent({
       eventType: 'RATE_LIMITED',
-      endpointId: id as string,
+      endpointId: combo.id,
       userId: authenticatedUserId,
-      clientIp: String(ip),
-      origin,
-      metadata: { reason: 'Request quota exceeded on combo', limitType: 'MCP_REQUEST' },
+      route: '/api/mcp/combo/[id]/http',
+      ip: String(ip),
+      reason: 'Post-auth request quota exceeded on combo',
     });
-    return res.status(429).json({ error: 'Too Many Requests: Rate limit quota exceeded.' });
+    applyRateLimitHeaders(res, reqLimitResult);
+    return res.status(429).json({ error: 'Too many requests' });
   }
 
-  // Serverless Session Management
-  evictExpiredComboSessions();
-  const sessionId = req.headers['mcp-session-id'] as string | undefined;
+  applyRateLimitHeaders(res, reqLimitResult);
 
-  if (sessionId && comboSessions.has(sessionId)) {
-    const sessionEntry = comboSessions.get(sessionId)!;
-    sessionEntry.lastSeenAt = Date.now();
-    await sessionEntry.transport.handlePostMessage(req, res, req.body);
-    return;
-  }
+  try {
+    evictExpiredComboSessions();
+    const sessionId = req.headers['mcp-session-id'] as string | undefined;
 
-  if (req.method === 'POST') {
-    const isInit = isInitializeRequest(req.body);
-
-    if (isInit) {
-      const transport = new StreamableHTTPServerTransport({
-        endpoint: `/api/mcp/combo/${id}/http`,
-      });
-
-      const server = await createComboMcpServer(combo, { source: 'COMBO' });
-      await server.connect(transport);
-      await transport.handlePostMessage(req, res, req.body);
-
-      const generatedSessionId = transport.sessionId;
-      if (generatedSessionId) {
-        comboSessions.set(generatedSessionId, {
-          transport,
-          server,
-          comboId: id as string,
-          userId: authenticatedUserId,
-          createdAt: Date.now(),
-          lastSeenAt: Date.now(),
-        });
+    // 1. Explicit Session Deletion / Close
+    if (req.method === 'DELETE') {
+      if (sessionId && comboSessions.has(sessionId)) {
+        const existing = comboSessions.get(sessionId);
+        if (existing && existing.comboId === id) {
+          comboSessions.delete(sessionId);
+          recordSecurityEvent({
+            eventType: 'SESSION_CLOSED',
+            endpointId: id as string,
+            userId: authenticatedUserId,
+            route: '/api/mcp/combo/[id]/http',
+            ip: String(ip),
+            metadata: {
+              session_id_hash: hashOpaqueToken(sessionId).substring(0, 16),
+              combo_id: id as string,
+            },
+          });
+        }
       }
-      return;
+      return res.status(200).json({ status: 'session_closed' });
     }
 
-    // Stateless cold-start fallback recovery
-    if (sessionId) {
-      const transport = new StreamableHTTPServerTransport({
-        endpoint: `/api/mcp/combo/${id}/http`,
-      });
-
+    // 2. Initialize Request: Establish MCP Session and generate Session ID
+    if (req.method === 'POST' && isInitializeRequest(req.body)) {
       const server = await createComboMcpServer(combo, { source: 'COMBO' });
-      await server.connect(transport);
+      const generatedSessionId = crypto.randomUUID();
 
-      comboSessions.set(sessionId, {
-        transport,
-        server,
-        comboId: id as string,
-        userId: authenticatedUserId,
-        createdAt: Date.now(),
-        lastSeenAt: Date.now(),
+      const transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: () => generatedSessionId,
+        onsessioninitialized: (newSessionId) => {
+          comboSessions.set(newSessionId, {
+            transport,
+            server,
+            comboId: id as string,
+            userId: authenticatedUserId,
+            createdAt: Date.now(),
+            lastSeenAt: Date.now(),
+          });
+          recordSecurityEvent({
+            eventType: 'SESSION_CREATED',
+            endpointId: id as string,
+            userId: authenticatedUserId,
+            route: '/api/mcp/combo/[id]/http',
+            ip: String(ip),
+            metadata: {
+              session_id_hash: hashOpaqueToken(newSessionId).substring(0, 16),
+              combo_id: id as string,
+            },
+          });
+        },
+        onsessionclosed: (closedSessionId) => {
+          comboSessions.delete(closedSessionId);
+        },
       });
 
-      await transport.handlePostMessage(req, res, req.body);
+      await server.connect(transport);
+      await transport.handleRequest(req, res, req.body);
       return;
     }
 
-    return res.status(400).json({ error: 'Bad Request: Initialize request or valid mcp-session-id required.' });
-  }
+    // 3. Warm Container Session Hit: If session exists in this Lambda instance's memory
+    if (sessionId) {
+      const existing = comboSessions.get(sessionId);
+      if (existing) {
+        // Enforce strict combo isolation
+        if (existing.comboId !== id) {
+          recordSecurityEvent({
+            eventType: 'ACCESS_DENIED',
+            endpointId: id as string,
+            userId: authenticatedUserId,
+            route: '/api/mcp/combo/[id]/http',
+            ip: String(ip),
+            reason: 'Session belongs to another combo',
+            metadata: {
+              session_combo_id: existing.comboId,
+              request_combo_id: id as string,
+            },
+          });
+          return res.status(403).json({ error: 'Session belongs to another combo' });
+        }
 
-  if (req.method === 'GET' && sessionId) {
-    if (comboSessions.has(sessionId)) {
-      const sessionEntry = comboSessions.get(sessionId)!;
-      sessionEntry.lastSeenAt = Date.now();
-      await sessionEntry.transport.handleReceive(req, res);
-      return;
+        existing.lastSeenAt = Date.now();
+        await existing.transport.handleRequest(req, res, req.body);
+        return;
+      }
     }
 
-    // Recover session for SSE / GET stream
-    const transport = new StreamableHTTPServerTransport({
-      endpoint: `/api/mcp/combo/${id}/http`,
-    });
-
+    // 4. Resilient Multi-Instance Serverless Handling for Subsequent Requests:
+    // When a request arrives at a fresh Lambda instance where local session memory is empty,
+    // or when operating in stateless mode with valid Bearer auth:
+    // Instantiate server + stateless transport to seamlessly process tools/list, tools/call, etc.
     const server = await createComboMcpServer(combo, { source: 'COMBO' });
-    await server.connect(transport);
-
-    comboSessions.set(sessionId, {
-      transport,
-      server,
-      comboId: id as string,
-      userId: authenticatedUserId,
-      createdAt: Date.now(),
-      lastSeenAt: Date.now(),
+    const transport = new StreamableHTTPServerTransport({
+      sessionIdGenerator: undefined,
     });
 
-    await transport.handleReceive(req, res);
-    return;
-  }
+    if (sessionId) {
+      recordSecurityEvent({
+        eventType: 'SESSION_REHYDRATED',
+        endpointId: id as string,
+        userId: authenticatedUserId,
+        route: '/api/mcp/combo/[id]/http',
+        ip: String(ip),
+        metadata: {
+          session_id_hash: hashOpaqueToken(sessionId).substring(0, 16),
+          combo_id: id as string,
+        },
+      });
+    }
 
-  return res.status(405).json({ error: 'Method Not Allowed' });
+    await server.connect(transport);
+    await transport.handleRequest(req, res, req.body);
+    return;
+  } catch (error: any) {
+    console.error('[Combo HTTP] MCP error:', error);
+    if (!res.headersSent) {
+      return res.status(500).json({ error: error.message });
+    }
+  }
 }

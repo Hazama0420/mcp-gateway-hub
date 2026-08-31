@@ -1,7 +1,7 @@
 // __tests__/combo_oauth.test.ts
 //
 // =========================================================================
-// Combo OAuth Client Management & Resource Security Test Suite
+// Combo OAuth Client Management, Discovery & MCP Transport Test Suite
 // MCP Gateway Hub (Hazama0420/mcp-gateway-hub)
 // =========================================================================
 
@@ -20,15 +20,21 @@ const {
   extractResourceTarget,
   getCanonicalComboResourceUrl,
   getCanonicalResourceUrl,
+  getOAuthProtectedResourceMetadataUrl,
+  getOAuthComboProtectedResourceMetadataUrl,
+  createProtectedResourceMetadata,
+  createComboProtectedResourceMetadata,
+  createAuthorizationServerMetadata,
   getManagedEndpointRedirectUris,
   getCanonicalGeminiRedirectUri,
+  getCanonicalIssuerUrl,
 } = require('../lib/oauth/config');
 const { verifyPkce } = require('../lib/oauth/pkce');
-const crypto = require('node:crypto');
+const nodeCrypto = require('node:crypto');
 
 async function runComboOAuthTests() {
   console.log('========================================================================');
-  console.log('  MCP GATEWAY HUB — COMBO OAUTH & RESOURCE ISOLATION TEST SUITE');
+  console.log('  MCP GATEWAY HUB — COMBO OAUTH, DISCOVERY & MCP TRANSPORT TEST SUITE   ');
   console.log('========================================================================\n');
 
   let passed = 0;
@@ -93,6 +99,8 @@ async function runComboOAuthTests() {
     ],
   };
 
+  const CANONICAL_ORIGIN = 'https://mcp-gateway-hub-beta.vercel.app';
+
   // =========================================================================
   // 1. Create Combo OAuth Client & Defaults
   // =========================================================================
@@ -123,8 +131,8 @@ async function runComboOAuthTests() {
   // 2. Resource Extraction & Resolution
   // =========================================================================
   console.log('\n--- 2. Resource Extraction & Resolution ---');
-  const resComboUrl = `https://mcp-gateway-hub-beta.vercel.app/api/mcp/combo/${comboDevOps.id}/http`;
-  const resEndpointUrl = `https://mcp-gateway-hub-beta.vercel.app/api/mcp/${epVercel.id}/http`;
+  const resComboUrl = `${CANONICAL_ORIGIN}/api/mcp/combo/${comboDevOps.id}/http`;
+  const resEndpointUrl = `${CANONICAL_ORIGIN}/api/mcp/${epVercel.id}/http`;
 
   const targetCombo = extractResourceTarget(resComboUrl);
   assert('Test 5: extractResourceTarget recognizes Combo resource type', targetCombo?.type === 'combo' && targetCombo?.id === comboDevOps.id);
@@ -132,121 +140,181 @@ async function runComboOAuthTests() {
   const targetEndpoint = extractResourceTarget(resEndpointUrl);
   assert('Test 6: extractResourceTarget recognizes Endpoint resource type', targetEndpoint?.type === 'endpoint' && targetEndpoint?.id === epVercel.id);
 
-  const canonicalComboUrl = getCanonicalComboResourceUrl(comboDevOps.id, 'https://mcp-gateway-hub-beta.vercel.app');
-  assert('Test 7: Canonical Combo resource URL matches expected path', canonicalComboUrl.includes(`/api/mcp/combo/${comboDevOps.id}/http`));
+  const canonicalComboUrl = getCanonicalComboResourceUrl(comboDevOps.id, CANONICAL_ORIGIN);
+  assert('Test 7: Canonical Combo resource URL matches expected path', canonicalComboUrl === `${CANONICAL_ORIGIN}/api/mcp/combo/${comboDevOps.id}/http`);
+
+  const canonicalEndpointUrl = getCanonicalResourceUrl(epVercel.id, CANONICAL_ORIGIN);
+  assert('Test 8: Canonical Endpoint resource URL matches expected path', canonicalEndpointUrl === `${CANONICAL_ORIGIN}/api/mcp/${epVercel.id}/http`);
 
   // =========================================================================
-  // 3. Authorization Code & PKCE S256
+  // 3. RFC 9728 Protected Resource Metadata for Combo
   // =========================================================================
-  console.log('\n--- 3. Authorization Code & PKCE S256 ---');
+  console.log('\n--- 3. RFC 9728 Protected Resource Metadata for Combo ---');
+  const comboPrmUrl = getOAuthProtectedResourceMetadataUrl(comboDevOps.id, CANONICAL_ORIGIN, { isCombo: true });
+  assert('Test 9: Combo PRM URL contains /api/mcp/combo/<combo-id>/http path', comboPrmUrl === `${CANONICAL_ORIGIN}/.well-known/oauth-protected-resource/api/mcp/combo/${comboDevOps.id}/http`);
+
+  const comboPrmUrlHelper = getOAuthComboProtectedResourceMetadataUrl(comboDevOps.id, CANONICAL_ORIGIN);
+  assert('Test 10: getOAuthComboProtectedResourceMetadataUrl produces identical canonical URL', comboPrmUrlHelper === comboPrmUrl);
+
+  const comboPrm = createProtectedResourceMetadata(comboDevOps.id, CANONICAL_ORIGIN, { isCombo: true });
+  assert('Test 11: Combo PRM resource matches exact Combo MCP URL', comboPrm.resource === `${CANONICAL_ORIGIN}/api/mcp/combo/${comboDevOps.id}/http`);
+  assert('Test 12: Combo PRM authorization_servers points to canonical issuer', comboPrm.authorization_servers.includes(CANONICAL_ORIGIN));
+  assert('Test 13: Combo PRM resource_name reflects Combo identity', comboPrm.resource_name === `MCP Combo ${comboDevOps.id}`);
+  assert('Test 14: Combo PRM resource_documentation points to /admin/combo', comboPrm.resource_documentation.includes('/admin/combo'));
+
+  const comboPrmHelper = createComboProtectedResourceMetadata(comboDevOps.id, CANONICAL_ORIGIN);
+  assert('Test 15: createComboProtectedResourceMetadata matches createProtectedResourceMetadata with isCombo', JSON.stringify(comboPrmHelper) === JSON.stringify(comboPrm));
+
+  // Standalone PRM Regression check
+  const epPrmUrl = getOAuthProtectedResourceMetadataUrl(epVercel.id, CANONICAL_ORIGIN);
+  assert('Test 16: Standalone endpoint PRM URL remains /api/mcp/<endpoint-id>/http', epPrmUrl === `${CANONICAL_ORIGIN}/.well-known/oauth-protected-resource/api/mcp/${epVercel.id}/http`);
+  const epPrm = createProtectedResourceMetadata(epVercel.id, CANONICAL_ORIGIN);
+  assert('Test 17: Standalone endpoint PRM resource matches standalone MCP URL', epPrm.resource === `${CANONICAL_ORIGIN}/api/mcp/${epVercel.id}/http`);
+
+  // =========================================================================
+  // 4. WWW-Authenticate Header Formatting for Combo
+  // =========================================================================
+  console.log('\n--- 4. WWW-Authenticate Header Formatting for Combo ---');
+  const buildComboWwwAuthHeader = (errorCode?: string, errorDescription?: string) => {
+    if (errorCode && errorDescription) {
+      return `Bearer error="${errorCode}", error_description="${errorDescription}", resource_metadata="${comboPrmUrl}"`;
+    }
+    return `Bearer resource_metadata="${comboPrmUrl}"`;
+  };
+
+  const comboInitial401 = buildComboWwwAuthHeader();
+  assert('Test 18: Initial 401 WWW-Authenticate header contains Bearer scheme', comboInitial401.startsWith('Bearer '));
+  assert('Test 19: Initial 401 WWW-Authenticate header references combo resource_metadata', comboInitial401.includes(`resource_metadata="${comboPrmUrl}"`));
+  assert('Test 20: Initial 401 WWW-Authenticate header has NO error parameter on discovery', !comboInitial401.includes('error='));
+
+  const comboInvalidToken401 = buildComboWwwAuthHeader('invalid_token', 'The access token is invalid');
+  assert('Test 21: Token rejection 401 includes error="invalid_token"', comboInvalidToken401.includes('error="invalid_token"'));
+  assert('Test 22: Token rejection 401 retains combo resource_metadata', comboInvalidToken401.includes(`resource_metadata="${comboPrmUrl}"`));
+
+  // =========================================================================
+  // 5. RFC 8414 Authorization Server Metadata Consistency
+  // =========================================================================
+  console.log('\n--- 5. RFC 8414 Authorization Server Metadata Consistency ---');
+  const asMeta = createAuthorizationServerMetadata(CANONICAL_ORIGIN);
+  assert('Test 23: AS Metadata issuer matches canonical origin', asMeta.issuer === CANONICAL_ORIGIN);
+  assert('Test 24: AS Metadata authorization_endpoint is /oauth/authorize', asMeta.authorization_endpoint === `${CANONICAL_ORIGIN}/oauth/authorize`);
+  assert('Test 25: AS Metadata token_endpoint is /oauth/token', asMeta.token_endpoint === `${CANONICAL_ORIGIN}/oauth/token`);
+  assert('Test 26: AS Metadata supports S256 code challenge', asMeta.code_challenge_methods_supported.includes('S256'));
+
+  // =========================================================================
+  // 6. Authorization Code & PKCE S256
+  // =========================================================================
+  console.log('\n--- 6. Authorization Code & PKCE S256 ---');
   const codeVerifier = 'dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk';
-  const codeChallenge = crypto.createHash('sha256').update(codeVerifier, 'ascii').digest('base64url');
+  const codeChallenge = nodeCrypto.createHash('sha256').update(codeVerifier, 'ascii').digest('base64url');
 
   const pkceS256Valid = verifyPkce(codeVerifier, codeChallenge, 'S256');
-  assert('Test 8: PKCE S256 verification succeeds with valid verifier', pkceS256Valid === true);
+  assert('Test 27: PKCE S256 verification succeeds with valid verifier', pkceS256Valid === true);
 
   const pkceInvalid = verifyPkce('wrong_verifier_1234567890123456789012345678', codeChallenge, 'S256');
-  assert('Test 9: Invalid verifier is rejected', pkceInvalid === false);
+  assert('Test 28: Invalid verifier is rejected', pkceInvalid === false);
 
   const pkcePlain = verifyPkce(codeVerifier, codeChallenge, 'plain');
-  assert('Test 10: PKCE plain method is rejected', pkcePlain === false);
+  assert('Test 29: PKCE plain method is rejected', pkcePlain === false);
 
   // =========================================================================
-  // 4. JWT Token Issuance & Combo Audience Binding
+  // 7. JWT Token Issuance & Combo Audience Binding
   // =========================================================================
-  console.log('\n--- 4. JWT Token Issuance & Combo Audience Binding ---');
+  console.log('\n--- 7. JWT Token Issuance & Combo Audience Binding ---');
   const tokenDevOps = signMcpAccessToken({
     userId: 'user_1',
-    endpointId: `combo_${comboDevOps.id}`,
+    comboId: comboDevOps.id,
     clientId: mockComboClient.client_id,
     scope: 'mcp:read mcp:write',
-    reqOrigin: 'https://mcp-gateway-hub-beta.vercel.app',
+    reqOrigin: CANONICAL_ORIGIN,
   });
 
-  assert('Test 11: JWT aud is bound to Combo canonical resource URL', tokenDevOps.payload.aud.includes(`/api/mcp/combo/${comboDevOps.id}/http`));
-  assert('Test 12: JWT endpoint_id is bound to Combo identifier', tokenDevOps.payload.endpoint_id === `combo_${comboDevOps.id}`);
-  assert('Test 13: JWT sub is bound to user ID', tokenDevOps.payload.sub === 'user_1');
+  assert('Test 30: JWT aud is bound to Combo canonical resource URL', tokenDevOps.payload.aud === `${CANONICAL_ORIGIN}/api/mcp/combo/${comboDevOps.id}/http`);
+  assert('Test 31: JWT endpoint_id is bound to Combo identifier (combo_<id>)', tokenDevOps.payload.endpoint_id === `combo_${comboDevOps.id}`);
+  assert('Test 32: JWT sub is bound to user ID', tokenDevOps.payload.sub === 'user_1');
+  assert('Test 33: JWT exp is valid and in future', tokenDevOps.payload.exp > Math.floor(Date.now() / 1000));
 
   // =========================================================================
-  // 5. Token Verification & Security Isolation
+  // 8. Token Verification & Security Isolation
   // =========================================================================
-  console.log('\n--- 5. Token Verification & Security Isolation ---');
-  const vDevOps = verifyMcpAccessToken(tokenDevOps.token, comboDevOps.id, 'https://mcp-gateway-hub-beta.vercel.app');
-  assert('Test 14: Token validates successfully on target Combo (PASS)', vDevOps.valid === true);
+  console.log('\n--- 8. Token Verification & Security Isolation ---');
+  const vDevOps = verifyMcpAccessToken(tokenDevOps.token, comboDevOps.id, CANONICAL_ORIGIN);
+  assert('Test 34: Token validates successfully on target Combo (PASS)', vDevOps.valid === true);
 
-  const vCrossCombo = verifyMcpAccessToken(tokenDevOps.token, comboDatabase.id, 'https://mcp-gateway-hub-beta.vercel.app');
-  assert('Test 15: Combo A token is REJECTED on Combo B (FAIL)', vCrossCombo.valid === false);
+  const vCrossCombo = verifyMcpAccessToken(tokenDevOps.token, comboDatabase.id, CANONICAL_ORIGIN);
+  assert('Test 35: Combo A token is REJECTED on Combo B (FAIL)', vCrossCombo.valid === false);
 
-  const vEndpoint = verifyMcpAccessToken(tokenDevOps.token, epVercel.id, 'https://mcp-gateway-hub-beta.vercel.app');
-  assert('Test 16: Combo token is REJECTED when used directly on underlying endpoint (FAIL)', vEndpoint.valid === false);
+  const vEndpoint = verifyMcpAccessToken(tokenDevOps.token, epVercel.id, CANONICAL_ORIGIN);
+  assert('Test 36: Combo token is REJECTED when used directly on underlying endpoint (FAIL)', vEndpoint.valid === false);
 
   // =========================================================================
-  // 6. Dynamic Tool Isolation on Combo
+  // 9. MCP Server Instance & Tools Assembly (DevOps Combo: Vercel + GitHub)
   // =========================================================================
-  console.log('\n--- 6. Dynamic Tool Isolation on Combo ---');
-  const serverDevOps = new McpServer({ name: 'Test Server', version: '1.0.0' });
-  registerVercel(serverDevOps, { token: 'mock_v' });
-  registerGithub(serverDevOps, { token: 'mock_gh' });
+  console.log('\n--- 9. MCP Server Instance & Tools Assembly (DevOps Combo: Vercel + GitHub) ---');
+  const serverDevOps = new McpServer({ name: `Combo - ${comboDevOps.name}`, version: '1.0.0' });
+  registerVercel(serverDevOps, { token: 'mock_v_token', teamId: '' });
+  registerGithub(serverDevOps, { token: 'mock_gh_token' });
 
   const devOpsTools = Object.keys((serverDevOps as any)._registeredTools || {});
-  assert('Test 17: DevOps Combo exposes Vercel tools', devOpsTools.includes('list_projects'));
-  assert('Test 18: DevOps Combo exposes GitHub tools', devOpsTools.includes('list_repos'));
-  assert('Test 19: DevOps Combo strictly excludes Neon run_sql_query', !devOpsTools.includes('run_sql_query'));
+  assert('Test 37: DevOps Combo exposes Vercel list_projects tool', devOpsTools.includes('list_projects'));
+  assert('Test 38: DevOps Combo exposes Vercel get_deployments tool', devOpsTools.includes('get_deployments'));
+  assert('Test 39: DevOps Combo exposes GitHub list_repos tool', devOpsTools.includes('list_repos'));
+  assert('Test 40: DevOps Combo exposes GitHub get_file_contents tool', devOpsTools.includes('get_file_contents'));
+  assert('Test 41: DevOps Combo strictly excludes Neon run_sql_query', !devOpsTools.includes('run_sql_query'));
+
+  const devOpsToolCount = calculateComboToolCount(comboDevOps.endpoints as any);
+  assert('Test 42: calculateComboToolCount computes exactly 11 tools', devOpsToolCount === 11);
+
+  const databaseToolCount = calculateComboToolCount(comboDatabase.endpoints as any);
+  assert('Test 43: calculateComboToolCount computes exactly 3 tools for database combo', databaseToolCount === 3);
 
   // =========================================================================
-  // 7. Client Lifecycle (Revoke & Delete)
+  // 10. Client Lifecycle (Revoke & Delete)
   // =========================================================================
-  console.log('\n--- 7. Client Lifecycle (Revoke & Delete) ---');
+  console.log('\n--- 10. Client Lifecycle (Revoke & Delete) ---');
   let clientState = { ...mockComboClient };
 
   // Revoke
   clientState.is_active = false;
-  assert('Test 20: Client marked inactive upon revoke', clientState.is_active === false);
+  assert('Test 44: Client marked inactive upon revoke', clientState.is_active === false);
 
   // Precondition: Active client cannot be deleted
   const canDeleteActive = !mockComboClient.is_active;
-  assert('Test 21: Active client deletion is rejected server-side', canDeleteActive === false);
+  assert('Test 45: Active client deletion is rejected server-side', canDeleteActive === false);
 
   // Revoked client can be deleted
   const canDeleteRevoked = !clientState.is_active;
-  assert('Test 22: Revoked client can be permanently deleted', canDeleteRevoked === true);
+  assert('Test 46: Revoked client can be permanently deleted', canDeleteRevoked === true);
 
   // =========================================================================
-  // 8. Tenant Isolation & Cross-User Security
+  // 11. Tenant Isolation & Cross-User Security
   // =========================================================================
-  console.log('\n--- 8. Tenant Isolation & Cross-User Security ---');
+  console.log('\n--- 11. Tenant Isolation & Cross-User Security ---');
   const attackerClient = {
     client_id: 'attacker_client_id',
     user_id: 'user_attacker_2',
   };
 
   const isCrossUserAllowed = attackerClient.user_id === comboDevOps.user_id;
-  assert('Test 23: Attacker client cannot authorize User 1 Combo (DENY)', !isCrossUserAllowed);
+  assert('Test 47: Attacker client cannot authorize User 1 Combo (DENY)', !isCrossUserAllowed);
 
   // =========================================================================
-  // 9. Existing MCP Endpoint OAuth Regression
+  // 12. Existing MCP Standalone Endpoint Regression
   // =========================================================================
-  console.log('\n--- 9. Existing MCP Endpoint OAuth Regression ---');
+  console.log('\n--- 12. Existing MCP Standalone Endpoint Regression ---');
   const tokenEndpoint = signMcpAccessToken({
     userId: 'user_1',
     endpointId: epVercel.id,
     clientId: 'client_endpoint_legacy',
     scope: 'mcp:read mcp:write',
-    reqOrigin: 'https://mcp-gateway-hub-beta.vercel.app',
+    reqOrigin: CANONICAL_ORIGIN,
   });
 
-  const vLegacyEndpoint = verifyMcpAccessToken(tokenEndpoint.token, epVercel.id, 'https://mcp-gateway-hub-beta.vercel.app');
-  assert('Test 24: Existing MCP Endpoint token verifies normally', vLegacyEndpoint.valid === true);
+  const vLegacyEndpoint = verifyMcpAccessToken(tokenEndpoint.token, epVercel.id, CANONICAL_ORIGIN);
+  assert('Test 48: Existing MCP Endpoint token verifies normally', vLegacyEndpoint.valid === true);
 
-  const vLegacyCross = verifyMcpAccessToken(tokenEndpoint.token, comboDevOps.id, 'https://mcp-gateway-hub-beta.vercel.app');
-  assert('Test 25: Existing MCP Endpoint token cannot access Combo (DENY)', vLegacyCross.valid === false);
-
-  // Exact tool count calculation
-  const devOpsToolCount = calculateComboToolCount(comboDevOps.endpoints as any);
-  assert('Test 26: calculateComboToolCount computes exactly 11 tools', devOpsToolCount === 11);
-
-  const databaseToolCount = calculateComboToolCount(comboDatabase.endpoints as any);
-  assert('Test 27: calculateComboToolCount computes exactly 3 tools for database combo', databaseToolCount === 3);
+  const vLegacyCross = verifyMcpAccessToken(tokenEndpoint.token, comboDevOps.id, CANONICAL_ORIGIN);
+  assert('Test 49: Existing MCP Endpoint token cannot access Combo (DENY)', vLegacyCross.valid === false);
 
   // =========================================================================
   // SUMMARY

@@ -6,7 +6,7 @@ import prisma from '@/lib/prisma';
 import { redirectUriMatches, createAuthorizationCode } from '@/lib/oauth/store';
 import { checkRateLimit, applyRateLimitHeaders, LIMITS } from '@/lib/security/ratelimit';
 import { recordSecurityEvent } from '@/lib/security/audit';
-import { extractEndpointIdFromResource } from '@/lib/oauth/config';
+import { extractEndpointIdFromResource, extractResourceTarget } from '@/lib/oauth/config';
 
 export const dynamic = 'force-dynamic';
 
@@ -427,6 +427,9 @@ export async function POST(req: Request) {
         id: targetId,
         user_id: user.id,
       },
+      include: {
+        endpoints: true,
+      },
     });
   } else {
     targetResource = await prisma.mcpEndpoint.findFirst({
@@ -480,15 +483,33 @@ export async function POST(req: Request) {
   }
 
   // 7. Issue Authorization Code
+  let endpointIdForDb = targetResource.id;
+  if (isComboTarget || client.combo_id) {
+    if (targetResource.endpoints && targetResource.endpoints.length > 0) {
+      endpointIdForDb = targetResource.endpoints[0].endpoint_id;
+    } else {
+      const userEp = await prisma.mcpEndpoint.findFirst({
+        where: { user_id: user.id, is_active: true },
+      });
+      if (userEp) {
+        endpointIdForDb = userEp.id;
+      }
+    }
+  }
+
+  const canonicalComboOrEpResource = isComboTarget || client.combo_id
+    ? `/api/mcp/combo/${targetResource.id}/http`
+    : `/api/mcp/${targetResource.id}/http`;
+
   const authCode = await createAuthorizationCode({
     clientId,
     userId: user.id,
-    endpointId: targetResource.id,
+    endpointId: endpointIdForDb,
     redirectUri: finalRedirectUri,
     codeChallenge,
     codeChallengeMethod: 'S256',
     scope: scope || client.scope || 'mcp:read mcp:write',
-    resource: resource || (isComboTarget ? `/api/mcp/combo/${targetResource.id}/http` : `/api/mcp/${targetResource.id}/http`),
+    resource: resource || canonicalComboOrEpResource,
   });
 
   recordSecurityEvent({

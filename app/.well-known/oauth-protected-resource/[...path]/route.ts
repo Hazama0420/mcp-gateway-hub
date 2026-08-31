@@ -1,6 +1,6 @@
 // app/.well-known/oauth-protected-resource/[...path]/route.ts
 import { NextResponse } from 'next/server';
-import { createProtectedResourceMetadata } from '@/lib/oauth/config';
+import { createProtectedResourceMetadata, extractResourceTarget } from '@/lib/oauth/config';
 
 export const dynamic = 'force-dynamic';
 
@@ -10,17 +10,31 @@ export async function GET(
 ) {
   const origin = req.headers.get('origin') || req.headers.get('host');
   const pathParts = params.path || [];
+  const fullPath = pathParts.join('/');
 
-  // Extract endpoint ID if path format is api/mcp/[id]/http or similar
-  let endpointId: string | undefined;
-  const mcpIdx = pathParts.indexOf('mcp');
-  if (mcpIdx !== -1 && pathParts[mcpIdx + 1]) {
-    endpointId = pathParts[mcpIdx + 1];
-  } else if (pathParts.length > 0) {
-    endpointId = pathParts[pathParts.length - 1];
+  // Extract target ID and type (combo vs endpoint)
+  let targetId: string | undefined;
+  let isCombo = false;
+
+  const targetInfo = extractResourceTarget(fullPath);
+  if (targetInfo) {
+    targetId = targetInfo.id;
+    isCombo = targetInfo.type === 'combo';
+  } else {
+    const comboIdx = pathParts.indexOf('combo');
+    const mcpIdx = pathParts.indexOf('mcp');
+    if (comboIdx !== -1 && pathParts[comboIdx + 1]) {
+      targetId = pathParts[comboIdx + 1];
+      isCombo = true;
+    } else if (mcpIdx !== -1 && pathParts[mcpIdx + 1] && pathParts[mcpIdx + 1] !== 'combo') {
+      targetId = pathParts[mcpIdx + 1];
+      isCombo = false;
+    } else if (pathParts.length > 0) {
+      targetId = pathParts[pathParts.length - 1];
+    }
   }
 
-  const metadata = createProtectedResourceMetadata(endpointId, origin);
+  const metadata = createProtectedResourceMetadata(targetId, origin, { isCombo });
 
   return NextResponse.json(metadata, {
     headers: {

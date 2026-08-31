@@ -147,34 +147,84 @@ export function extractEndpointIdFromResource(resource: string | null | undefine
 }
 
 /**
- * Constructs the RFC 9728 OAuth 2.0 Protected Resource Metadata URL for an endpoint or root.
- * RFC 9728 path-specific: /.well-known/oauth-protected-resource/api/mcp/<endpoint-id>/http
+ * Constructs the RFC 9728 OAuth 2.0 Protected Resource Metadata URL for an endpoint, combo, or root.
+ * RFC 9728 path-specific:
+ * - Standalone: /.well-known/oauth-protected-resource/api/mcp/<endpoint-id>/http
+ * - Combo:      /.well-known/oauth-protected-resource/api/mcp/combo/<combo-id>/http
  */
-export function getOAuthProtectedResourceMetadataUrl(endpointId?: string, reqOrigin?: string | null): string {
+export function getOAuthProtectedResourceMetadataUrl(
+  endpointOrComboId?: string,
+  reqOrigin?: string | null,
+  options?: { isCombo?: boolean }
+): string {
   const issuer = getCanonicalIssuerUrl(reqOrigin);
-  if (endpointId) {
-    return `${issuer}/.well-known/oauth-protected-resource/api/mcp/${endpointId}/http`;
+  if (endpointOrComboId) {
+    const isPrefixed = endpointOrComboId.startsWith('combo_');
+    const isCombo = Boolean(options?.isCombo || isPrefixed);
+    const rawId = options?.isCombo
+      ? endpointOrComboId
+      : (isPrefixed ? endpointOrComboId.replace(/^combo_/, '') : endpointOrComboId);
+    if (isCombo) {
+      return `${issuer}/.well-known/oauth-protected-resource/api/mcp/combo/${rawId}/http`;
+    }
+    return `${issuer}/.well-known/oauth-protected-resource/api/mcp/${rawId}/http`;
   }
   return `${issuer}/.well-known/oauth-protected-resource`;
 }
 
 /**
- * Generates RFC 9728 Protected Resource Metadata JSON object.
+ * Convenience helper to construct the RFC 9728 OAuth 2.0 Protected Resource Metadata URL for a Combo.
  */
-export function createProtectedResourceMetadata(endpointId?: string, reqOrigin?: string | null) {
+export function getOAuthComboProtectedResourceMetadataUrl(comboId: string, reqOrigin?: string | null): string {
+  return getOAuthProtectedResourceMetadataUrl(comboId, reqOrigin, { isCombo: true });
+}
+
+/**
+ * Generates RFC 9728 Protected Resource Metadata JSON object for endpoints, combos, or root.
+ */
+export function createProtectedResourceMetadata(
+  endpointOrComboId?: string,
+  reqOrigin?: string | null,
+  options?: { isCombo?: boolean }
+) {
   const issuer = getCanonicalIssuerUrl(reqOrigin);
-  const resource = endpointId
-    ? getCanonicalResourceUrl(endpointId, reqOrigin)
-    : `${issuer}/api/mcp`;
+  const isPrefixed = Boolean(endpointOrComboId && endpointOrComboId.startsWith('combo_'));
+  const isCombo = Boolean(options?.isCombo || isPrefixed);
+  const rawId = endpointOrComboId
+    ? (options?.isCombo ? endpointOrComboId : (isPrefixed ? endpointOrComboId.replace(/^combo_/, '') : endpointOrComboId))
+    : undefined;
+
+  let resource = `${issuer}/api/mcp`;
+  let resourceName = 'MCP Gateway Hub Protected Resource';
+  let resourceDoc = `${issuer}/admin/endpoints`;
+
+  if (rawId) {
+    if (isCombo) {
+      resource = getCanonicalComboResourceUrl(rawId, reqOrigin);
+      resourceName = `MCP Combo ${rawId}`;
+      resourceDoc = `${issuer}/admin/combo`;
+    } else {
+      resource = getCanonicalResourceUrl(rawId, reqOrigin);
+      resourceName = `MCP Endpoint ${rawId}`;
+      resourceDoc = `${issuer}/admin/endpoints`;
+    }
+  }
 
   return {
     resource,
     authorization_servers: [issuer],
     scopes_supported: SUPPORTED_SCOPES,
     bearer_methods_supported: ['header'],
-    resource_name: endpointId ? `MCP Endpoint ${endpointId}` : 'MCP Gateway Hub Protected Resource',
-    resource_documentation: `${issuer}/admin/endpoints`,
+    resource_name: resourceName,
+    resource_documentation: resourceDoc,
   };
+}
+
+/**
+ * Convenience helper to generate RFC 9728 Protected Resource Metadata JSON object for a Combo.
+ */
+export function createComboProtectedResourceMetadata(comboId: string, reqOrigin?: string | null) {
+  return createProtectedResourceMetadata(comboId, reqOrigin, { isCombo: true });
 }
 
 /**

@@ -203,6 +203,8 @@ export async function POST(req: Request) {
       clientId,
       scope: codeRecord.scope || undefined,
       reqOrigin: origin,
+      resource: codeRecord.resource || resource || undefined,
+      comboId: codeRecord.client?.combo_id || undefined,
     });
 
     recordSecurityEvent({

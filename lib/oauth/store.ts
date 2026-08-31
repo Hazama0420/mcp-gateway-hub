@@ -781,14 +781,29 @@ export async function issueOAuthTokenSet(params: {
   clientId: string;
   scope?: string;
   reqOrigin?: string | null;
+  resource?: string;
+  comboId?: string;
 }) {
   const prisma = getPrismaClient();
   const jwtHelper = getJwtHelper();
+  const configHelper = getConfigHelper();
+
+  // Detect if target is a combo via explicit comboId, endpointId prefix, or resource URL
+  const targetInfo = configHelper?.extractResourceTarget
+    ? configHelper.extractResourceTarget(params.resource || params.endpointId)
+    : null;
+  const isCombo = Boolean(
+    params.comboId ||
+    params.endpointId?.startsWith('combo_') ||
+    targetInfo?.type === 'combo'
+  );
+  const rawComboId = params.comboId || (params.endpointId?.startsWith('combo_') ? params.endpointId.replace(/^combo_/, '') : (targetInfo?.type === 'combo' ? targetInfo.id : undefined));
 
   // 1. Generate JWT access token
   const { token: accessToken, expiresIn, payload } = jwtHelper.signMcpAccessToken({
     userId: params.userId,
-    endpointId: params.endpointId,
+    endpointId: isCombo ? undefined : params.endpointId,
+    comboId: isCombo ? rawComboId : undefined,
     clientId: params.clientId,
     scope: params.scope,
     expiresInSeconds: 3600, // 1 hour
@@ -833,6 +848,7 @@ export async function refreshOAuthToken(params: {
 }) {
   const prisma = getPrismaClient();
   const jwtHelper = getJwtHelper();
+  const configHelper = getConfigHelper();
   const rtHash = hashOpaqueToken(params.refreshToken);
 
   const rtRecord = await prisma.oAuthRefreshToken.findUnique({
@@ -864,11 +880,27 @@ export async function refreshOAuthToken(params: {
     return { valid: false, error: 'invalid_grant', error_description: 'MCP endpoint is inactive' };
   }
 
+  // Detect if target was combo from rtRecord.resource or rtRecord.client.combo_id
+  let isCombo = false;
+  let comboId: string | undefined = rtRecord.client?.combo_id || undefined;
+  if (rtRecord.resource) {
+    const targetInfo = configHelper?.extractResourceTarget
+      ? configHelper.extractResourceTarget(rtRecord.resource)
+      : null;
+    if (targetInfo && targetInfo.type === 'combo') {
+      isCombo = true;
+      comboId = targetInfo.id;
+    }
+  } else if (comboId) {
+    isCombo = true;
+  }
+
   // Issue new access token
   const scope = params.scope || rtRecord.scope || 'mcp:read mcp:write';
   const { token: newAccessToken, expiresIn } = jwtHelper.signMcpAccessToken({
     userId: rtRecord.user_id,
-    endpointId: rtRecord.endpoint_id,
+    endpointId: isCombo ? undefined : rtRecord.endpoint_id,
+    comboId: isCombo ? comboId : undefined,
     clientId: params.clientId,
     scope,
     expiresInSeconds: 3600,

@@ -1,5 +1,6 @@
 {
   "compilerOptions": {
+    "target": "ES2022",
     "lib": [
       "dom",
       "dom.iterable",
@@ -34,7 +35,6 @@
   },
   "include": [
     "next-env.d.ts",
-    ".next/types/**/*.ts",
     "app/**/*.ts",
     "app/**/*.tsx",
     "components/**/*.ts",
@@ -45,10 +45,15 @@
     "pages/**/*.tsx",
     "scripts/**/*.ts",
     "__tests__/**/*.ts",
-    "middleware.ts"
+    "middleware.ts",
+    ".next/types/**/*.ts"
   ],
   "exclude": [
     "node_modules",
-    "Gsuiteto9router"
+    "**/node_modules/**",
+    ".git",
+    ".next",
+    "Gsuiteto9router",
+    "Gsuiteto9router/**/*"
   ]
 }
